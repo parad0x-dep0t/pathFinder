@@ -80,5 +80,16 @@ npm run start
 
 ---
 
-## 📄 License
-MIT License. Built for ethical penetration testing and CTF educational purposes.
+## ⚠️ Legal & Ethical Disclaimer
+
+> **IMPORTANT:** Pathfinder is developed and distributed strictly for **educational purposes**, CTF competitions (e.g., HackTheBox, TryHackMe, Proving Grounds), and authorized penetration testing engagements where explicit, written permission has been obtained from the system owners. 
+> 
+> Unauthorized testing, exploitation, or attacking of networks and systems without explicit authorization is illegal. The developers and contributors assume no liability and are not responsible for any misuse, damage, or legal consequences caused by this tool.
+
+---
+
+## 📄 License & Acknowledgments
+
+- **License:** MIT License. Built for ethical penetration testing and CTF educational purposes.
+- **Methodology & Sources:** Inspired by HackTricks, PayloadsAllTheThings, WADComs, GTFOBins, LOLBAS Project, Orange Cyberdefense Mindmaps, and HTB Academy CPTS methodology.
+
