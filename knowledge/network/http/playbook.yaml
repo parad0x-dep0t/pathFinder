@@ -1,0 +1,79 @@
+id: http
+name: Web Application Reconnaissance (Port 80 / 443 / Custom Web)
+category: web
+description: Structured methodology for web services on ports 80, 443, 8080, 8978, and any custom web port. Covers technology fingerprinting, directory/file discovery, API endpoints, and parameter fuzzing.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+  - http-alt
+tags:
+  - web
+  - http
+  - https
+  - fuzzing
+  - recon
+steps:
+  - id: http-whatweb
+    title: Web Technology & CMS Fingerprinting (WhatWeb)
+    phase: reconnaissance
+    purpose: Identify web server software, CMS (WordPress, Joomla, Drupal), frameworks (Django, Laravel, Spring), PHP version, and cookies.
+    command: whatweb -a 3 {{TARGET_URL}}
+    expected_output:
+      - '{{TARGET_URL}} [200 OK] Apache[2.4.41], Bootstrap, HTTPServer[Ubuntu Linux], PHP[7.4.3], Title[Welcome]'
+    common_mistakes:
+      - Not inspecting raw HTTP response headers for internal framework details (e.g. `X-Powered-By`).
+    if_success: Identified web stack! Check for known CVEs for the specific CMS/framework versions.
+    if_failure: Generic response. Proceed to directory and virtual host discovery.
+    references:
+      - https://portswigger.net/web-security
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web
+  - id: http-dir-fuzz
+    title: Directory & File Discovery (ffuf)
+    phase: enumeration
+    purpose: Fuzz for hidden administration panels, backup files, `.git` repositories, configuration files, and API routes.
+    command: ffuf -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt -u {{TARGET_URL}}/FUZZ -mc 200,204,301,302,307,401,403 -e .php,.html,.txt,.bak,.json
+    expected_output:
+      - 'admin                 [Status: 301, Size: 178]'
+      - 'config.php.bak        [Status: 200, Size: 1420]'
+      - 'api                   [Status: 200, Size: 520]'
+    common_mistakes:
+      - Not fuzzing file extensions (`-e .php,.txt,.bak,.json`); hidden backup files are high-value targets.
+    if_success: Discovered hidden paths! Browse to discovered endpoints and inspect source code.
+    if_failure: No directories found. Test alternative wordlists (e.g. `common.txt` or `directory-list-2.3-medium.txt`).
+    references:
+      - https://portswigger.net/web-security
+  - id: http-vhost-fuzz
+    title: Virtual Host / Host Header Routing Fuzzing
+    phase: enumeration
+    purpose: Detect virtual hosts on the same IP by fuzzing the `Host:` request header.
+    command: 'ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u {{TARGET_URL}} -H "Host: FUZZ.{{DOMAIN|corp.local}}" -fs 0'
+    expected_output:
+      - 'portal   [Status: 200, Size: 3410, Words: 280]'
+    common_mistakes:
+      - Forgetting to add newly discovered virtual hosts to `/etc/hosts` on your attacking machine.
+    if_success: Virtual host found! Add to `/etc/hosts` and scan the newly mapped application.
+    if_failure: No virtual hosts configured. Proceed to parameter fuzzing and web vulnerability testing.
+    references:
+      - https://portswigger.net/web-security
+  - id: http-param-fuzz
+    title: GET / POST Parameter Discovery
+    phase: enumeration
+    purpose: Discover hidden input parameters on pages that accept query strings (often vulnerable to LFI, SSRF, or SQLi).
+    command: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u {{TARGET_URL}}/index.php?FUZZ=test -fs 0
+    expected_output:
+      - 'page     [Status: 200, Size: 2410, Words: 190]'
+      - 'file     [Status: 200, Size: 1800, Words: 120]'
+    common_mistakes:
+      - Testing only GET requests; some parameters are only processed via POST body.
+    if_success: Input parameter found! Test for LFI (`?page=`), Command Injection (`?cmd=`), and SQLi (`?id=`).
+    if_failure: No parameters found. Inspect JavaScript source files for client-side API endpoints.
+    references:
+      - https://portswigger.net/web-security

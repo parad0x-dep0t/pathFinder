@@ -1,0 +1,11 @@
+id: "kerberos"
+name: "Kerberos & Active Directory Authentication"
+category: "network"
+description: "Active Directory authentication methodology for Kerberos on port 88. Covers pre-authentication username harvesting, AS-REP Roasting for accounts without pre-auth, and Kerberoasting for SPN service accounts."
+port_triggers:
+  - 88
+tags:
+  - "kerberos"
+  - "active-directory"
+  - "asreproast"
+  - "kerberoast"

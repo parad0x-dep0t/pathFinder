@@ -1,0 +1,87 @@
+id: ldap
+name: LDAP & Active Directory Reconnaissance (Port 389 / 636)
+category: network
+description: Comprehensive methodology for Lightweight Directory Access Protocol (LDAP) on ports 389, 636, and 3268. Covers anonymous RootDSE, domain dumps, password in descriptions, LAPS, and BloodHound.
+port_triggers:
+  - 389
+  - 636
+  - 3268
+service_triggers:
+  - ldap
+  - ldaps
+tags:
+  - ldap
+  - active-directory
+  - bloodhound
+  - laps
+  - recon
+steps:
+  - id: ldap-root-dse
+    title: LDAP Anonymous RootDSE Query
+    phase: reconnaissance
+    purpose: Query the LDAP RootDSE unauthenticated to discover domain naming contexts, domain functional level, and Forest configuration.
+    command: ldapsearch -H ldap://{{TARGET}} -x -s base namingcontexts
+    expected_output:
+      - 'namingContexts: DC=corp,DC=local'
+      - 'namingContexts: CN=Configuration,DC=corp,DC=local'
+    common_mistakes:
+      - Not specifying `-x` for simple anonymous authentication.
+    if_success: Identified Base DN (`DC=corp,DC=local`). Proceed to anonymous object dump.
+    if_failure: Anonymous RootDSE disabled. Try authenticated query with discovered credentials.
+    references:
+      - https://wadcoms.github.io/
+  - id: ldap-anon-dump
+    title: Anonymous LDAP Domain Object Dump
+    phase: enumeration
+    purpose: Dump all readable domain objects (users, computers, groups, GPOs) to HTML tables using ldapdomaindump.
+    command: ldapdomaindump -u '' -p '' -o ./ldap_loot {{TARGET}}
+    expected_output:
+      - '[*] Dumping domain...'
+      - '[*] Found 25 users'
+      - '[*] Generated domain_users.html'
+    common_mistakes:
+      - Not inspecting `domain_users.html` for password notes written in user description fields.
+    if_success: Domain dumped! Inspect `domain_users.html` and `domain_groups.html` in browser.
+    if_failure: Anonymous binding disabled. Use authenticated NetExec LDAP queries.
+    references:
+      - https://wadcoms.github.io/
+  - id: ldap-user-descriptions
+    title: Search Passwords in LDAP User Descriptions
+    phase: enumeration
+    purpose: Search all Active Directory user accounts for descriptions containing plaintext passwords, API keys, or onboarding notes.
+    command: netexec ldap {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}' -M get-desc-users
+    expected_output:
+      - '[+] User: jdoe | Description: Password set to Summer2024! during onboarding'
+    common_mistakes:
+      - Skipping computer account descriptions; service account passwords are often stored there.
+    if_success: Discovered plaintext credential! Test credential against SMB, WinRM, and SSH.
+    if_failure: No passwords in descriptions. Proceed to LAPS or BloodHound collection.
+    references:
+      - https://wadcoms.github.io/
+  - id: ldap-laps-dump
+    title: Extract LAPS Local Administrator Passwords
+    phase: exploitation
+    purpose: Query Active Directory for Local Administrator Password Solution (`ms-Mcs-AdmPwd`) attributes to retrieve cleartext local admin passwords.
+    command: netexec ldap {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}' -M laps
+    expected_output:
+      - '[+] Computer: WORKSTATION01$ | LAPS Password: K8!mP9#qZ2'
+    common_mistakes:
+      - User must have Read permissions on LAPS attributes; usually Delegated Admins or HelpDesk.
+    if_success: LAPS Administrator password recovered! Use WinRM/SMB to login as local Administrator.
+    if_failure: Access Denied on LAPS attributes. Proceed to BloodHound attack path mapping.
+    references:
+      - https://wadcoms.github.io/
+  - id: ldap-bloodhound-collect
+    title: BloodHound Active Directory Graph Ingestion
+    phase: enumeration
+    purpose: Collect the complete Active Directory database (users, groups, sessions, ACLs, GPOs, trusts) for visualization in BloodHound.
+    command: bloodhound-python -u '{{USERNAME}}' -p '{{PASSWORD}}' -d {{DOMAIN|corp.local}} -dc {{TARGET}} -c All --zip
+    expected_output:
+      - '[*] Progress: 100%'
+      - '[*] Output file: 20240320_bloodhound.zip'
+    common_mistakes:
+      - Using an unresolvable domain name; ensure `{{DOMAIN}}` points to `{{TARGET}}` in `/etc/hosts`.
+    if_success: BloodHound data collected! Import zip into BloodHound and check "Shortest Paths to Domain Admins".
+    if_failure: Kerberos authentication issue. Ensure system time is synchronized with DC.
+    references:
+      - https://wadcoms.github.io/

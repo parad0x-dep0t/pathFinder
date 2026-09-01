@@ -1,0 +1,69 @@
+id: ssh
+name: SSH Enumeration & Access (Port 22)
+category: network
+description: Methodology for Secure Shell (SSH) on port 22. Covers version auditing, supported auth algorithms, credential spraying, private key logins, and passphrase cracking.
+port_triggers:
+  - 22
+service_triggers:
+  - ssh
+tags:
+  - ssh
+  - remote-access
+  - credentials
+  - network
+steps:
+  - id: ssh-banner-auth
+    title: SSH Banner & Supported Authentication Check
+    phase: reconnaissance
+    purpose: Inspect OpenSSH banner, OS release, and query supported authentication mechanisms (password, publickey, keyboard-interactive).
+    command: ssh -v -o PreferredAuthentications=none -o StrictHostKeyChecking=no root@{{TARGET}}
+    expected_output:
+      - OpenSSH_8.2p1 Ubuntu-4ubuntu0.5
+      - 'debug1: Authentications that can continue: publickey,password'
+    common_mistakes:
+      - Assuming SSH password auth is enabled without testing PreferredAuthentications.
+    if_success: Identified exact OpenSSH version and allowed authentication types.
+    if_failure: Connection timed out. Verify network reachability or port forwarding.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ssh
+  - id: ssh-pass-spray
+    title: SSH Password Spraying (NetExec)
+    phase: exploitation
+    purpose: Test discovered target credentials across SSH with automatic rate-limit handling.
+    command: netexec ssh {{TARGET}} -u '{{USERNAME|admin}}' -p '{{PASSWORD}}' --continue-on-success
+    expected_output:
+      - '[+] SSH {{TARGET}}:22 ({{USERNAME}}:{{PASSWORD}}) - Logged in successfully'
+    common_mistakes:
+      - Locking out accounts by spraying without verifying domain/local lockout policies.
+    if_success: 'Valid SSH credentials! Log in with interactive shell: `ssh {{USERNAME}}@{{TARGET}}`.'
+    if_failure: Login failed. Check if user requires private key auth instead of password.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ssh
+  - id: ssh-key-login
+    title: SSH Private Key Login
+    phase: exploitation
+    purpose: Authenticate to the target using an extracted or cracked RSA/Ed25519 private key file.
+    command: chmod 600 id_rsa && ssh -i id_rsa -o StrictHostKeyChecking=no {{USERNAME|root}}@{{TARGET}}
+    expected_output:
+      - Welcome to Ubuntu 22.04 LTS
+      - '{{USERNAME}}@hostname:~$'
+    common_mistakes:
+      - Forgetting `chmod 600 id_rsa`; OpenSSH will reject keys with broad permissions.
+    if_success: Foothold established! Stabilize TTY and proceed to Linux privilege escalation.
+    if_failure: Key passphrase requested or key format invalid. Convert/crack with ssh2john.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ssh
+  - id: ssh-crack-key
+    title: Encrypted SSH Private Key Passphrase Cracking
+    phase: exploitation
+    purpose: Extract the hash from an encrypted SSH private key and crack its passphrase using John the Ripper.
+    command: ssh2john id_rsa > id_rsa.hash && john --wordlist=/usr/share/wordlists/rockyou.txt id_rsa.hash
+    expected_output:
+      - Loaded 1 password hash (SSH [RSA/DSA/EC/OPENSSH 32/64])
+      - passphrase123    (id_rsa)
+    common_mistakes:
+      - Using full wordlist before checking rockyou.txt or candidate passwords found in notes.
+    if_success: Passphrase cracked! Use cracked passphrase with `ssh -i id_rsa {{USERNAME}}@{{TARGET}}`.
+    if_failure: Passphrase not in wordlist. Check for custom company password mutations.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ssh

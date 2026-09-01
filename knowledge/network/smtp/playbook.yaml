@@ -1,0 +1,59 @@
+id: smtp
+name: SMTP Email Service Enumeration (Ports 25 / 465 / 587)
+category: network
+description: Methodology for Simple Mail Transfer Protocol (SMTP) on ports 25, 465, and 587. Covers banner grabbing, open relay checks, VRFY/EXPN user enumeration, and phishing tests.
+port_triggers:
+  - 25
+  - 465
+  - 587
+service_triggers:
+  - smtp
+  - smtps
+  - submission
+tags:
+  - smtp
+  - mail
+  - recon
+  - user-enumeration
+steps:
+  - id: smtp-nmap-relay
+    title: SMTP Open Relay & Script Scan
+    phase: reconnaissance
+    purpose: Check if the SMTP server is configured as an open relay and discover supported commands (STARTTLS, AUTH, VRFY).
+    command: nmap -p 25,465,587 --script smtp-open-relay,smtp-commands,smtp-enum-users -sV {{TARGET}}
+    expected_output:
+      - '| smtp-open-relay: Server is an open relay (MAIL FROM:<...>)'
+      - '| smtp-commands: 250-SIZE, 250-VRFY, 250-ETRN'
+    common_mistakes:
+      - Not testing on port 587 (Submission) which often has different authentication rules than port 25.
+    if_success: SMTP features identified! If open relay is enabled, test sending spoofed internal emails.
+    if_failure: Port filtered or closed. Proceed to other services.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smtp
+  - id: smtp-user-enum
+    title: SMTP User Enumeration via VRFY / EXPN / RCPT
+    phase: enumeration
+    purpose: Verify valid system and domain accounts using SMTP `VRFY` and `RCPT TO` commands with smtp-user-enum.
+    command: smtp-user-enum -M VRFY -U /usr/share/seclists/Usernames/top-usernames-shortlist.txt -t {{TARGET}}
+    expected_output:
+      - '[+] 10.10.10.10:25 - User "admin" exists'
+      - '[+] 10.10.10.10:25 - User "root" exists'
+    common_mistakes:
+      - If VRFY mode is disabled by server, switch to `-M RCPT` mode with `-D {{DOMAIN|corp.local}}`.
+    if_success: Valid users discovered! Save list to `users.txt` for password spraying across SSH, SMB, and FTP.
+    if_failure: VRFY and RCPT rejected. Check Web or LDAP enumeration.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smtp
+  - id: smtp-send-email
+    title: Send Test Email / Internal Phish (swaks)
+    phase: exploitation
+    purpose: Send an email to an internal user with attachment or credential harvesting link using the Swiss Army Knife for SMTP (swaks).
+    command: swaks --to {{USERNAME|admin}}@{{DOMAIN|corp.local}} --from it-support@{{DOMAIN|corp.local}} --server {{TARGET}} --body "Please review attachment" --attach /tmp/payload.pdf
+    expected_output:
+      - '=== 250 2.0.0 Ok: queued as 4T8vK74H7zZ2...'
+    common_mistakes:
+      - Ensure domain matches target company internal email domain.
+    if_success: Email delivered to target mailbox! Monitor listener for reverse connection.
+    if_failure: Authentication required. Test with discovered credentials.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smtp

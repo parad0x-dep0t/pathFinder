@@ -1,0 +1,12 @@
+id: "smb"
+name: "SMB Enumeration & Assessment"
+category: "network"
+description: "Comprehensive penetration testing methodology for Server Message Block (SMB / Samba) on ports 139 and 445. Covers anonymous null sessions, share enumeration, RID cycling for user enumeration, and SMB signing security."
+port_triggers:
+  - 139
+  - 445
+tags:
+  - "smb"
+  - "samba"
+  - "active-directory"
+  - "network"

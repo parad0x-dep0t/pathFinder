@@ -1,0 +1,72 @@
+id: unknown-service
+name: Unknown Port & Custom Daemon Triage
+category: network
+description: Methodology for probing non-standard and unknown open ports on CTF machines. Covers banner grabbing, raw TCP socket testing, HTTP/HTTPS discovery, and aggressive Nmap fingerprinting.
+port_triggers: []
+service_triggers:
+  - unknown
+  - custom
+tags:
+  - unknown
+  - triage
+  - banner-grabbing
+  - recon
+steps:
+  - id: unknown-raw-socket
+    title: Raw Socket Connection & Banner Grab (Netcat)
+    phase: reconnaissance
+    purpose: Connect directly to the unknown open port to capture any initial service banner, greeting message, or text prompts.
+    command: nc -nv -w 5 {{TARGET}} {{PORT|8978}}
+    expected_output:
+      - (UNKNOWN) [{{TARGET}}] {{PORT}} open
+      - 220 Service Ready / Welcome Banner / SSH-2.0-...
+    common_mistakes:
+      - Not pressing Enter or sending dummy text if the daemon waits for client hello.
+    if_success: Banner received! Identify the daemon protocol (HTTP, SSH, SMTP, Redis) and assign the matching playbook.
+    if_failure: No banner returned. Proceed to HTTP protocol probe.
+    references:
+      - https://book.hacktricks.xyz/generic-methodologies-and-resources/pentesting-network/
+  - id: unknown-http-probe
+    title: Plaintext HTTP Protocol Verification (curl)
+    phase: reconnaissance
+    purpose: Send an HTTP GET request to see if the unknown port is hosting a web application, API endpoint, or REST service.
+    command: curl -i -s -k "http://{{TARGET}}:{{PORT|8978}}/" -m 5
+    expected_output:
+      - HTTP/1.1 200 OK
+      - 'Content-Type: text/html'
+      - <!doctype html>
+    common_mistakes:
+      - 'If server returns 400 Bad Request / Plaintext sent to HTTPS port, the service is HTTPS: use `https://` instead.'
+    if_success: Web application detected! Map this port to HTTP in Pathfinder to unlock all Web Exploitation playbooks.
+    if_failure: Connection reset or empty reply. Test HTTPS / TLS handshake next.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web
+  - id: unknown-https-probe
+    title: HTTPS / TLS Handshake & SSL Certificate Inspection
+    phase: reconnaissance
+    purpose: Probe for SSL/TLS encrypted web services and inspect the TLS certificate for internal domain names and hostnames.
+    command: curl -i -s -k "https://{{TARGET}}:{{PORT|8978}}/" -m 5
+    expected_output:
+      - HTTP/1.1 200 OK / 302 Found
+      - 'SSL certificate verify result: self signed certificate'
+      - 'subject: CN=internal.corp.local'
+    common_mistakes:
+      - Forgetting `-k` (insecure flag) to ignore self-signed CTF certificates.
+    if_success: HTTPS service detected! Note certificate hostnames and add to `/etc/hosts`.
+    if_failure: TLS handshake failed. Run aggressive Nmap script scan.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web
+  - id: unknown-nmap-deep
+    title: Aggressive Nmap Service & Script Fingerprinting
+    phase: enumeration
+    purpose: Run all Nmap version probes and default discovery scripts with `--version-all` to force protocol identification.
+    command: nmap -sV -sC -p {{PORT|8978}} --version-all -Pn {{TARGET}}
+    expected_output:
+      - '{{PORT}}/tcp open  http  Jetty 9.4.43 / Apache / Custom Python'
+      - '|_http-title: Admin Portal'
+    common_mistakes:
+      - Running without `-Pn`; firewalls might drop ICMP echo requests.
+    if_success: Identified exact daemon and version! Check for public exploits and CVEs.
+    if_failure: Service unrecognized. Test with raw Python socket script or fuzz with generic fuzzers.
+    references:
+      - https://nmap.org/book/man-version-detection.html

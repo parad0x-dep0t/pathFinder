@@ -1,0 +1,50 @@
+- id: "http-tech-fingerprint"
+  title: "Web Technology & Header Fingerprinting"
+  phase: "reconnaissance"
+  purpose: "Identify server banners, web application frameworks, CMS engines, cookies, and reverse proxy architectures using whatweb and curl."
+  command: "whatweb http://{{TARGET}}:{{PORT|80}} -a 3"
+  expected_output:
+    - "http://{{TARGET}}:80 [200 OK] Apache[2.4.52], HTTPServer[Ubuntu Linux][Apache/2.4.52], PHP[8.1.2], Title[Dashboard - Login]"
+    - "Cookies[PHPSESSID], PoweredBy[PHP/8.1.2]"
+  common_mistakes:
+    - "Failing to inspect response headers for hidden X-Powered-By, Server, or CSP headers."
+    - "Overlooking HTTPS (port 443) or alternative ports like 8080 or 8443."
+
+- id: "http-dir-fuzzing"
+  title: "Directory & File Discovery"
+  phase: "enumeration"
+  purpose: "Discover hidden directories, administrative endpoints, backup files, and API endpoints using high-speed dictionary fuzzing."
+  command: "ffuf -u http://{{TARGET}}:{{PORT|80}}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt -mc 200,204,301,302,307,401,403 -e .php,.html,.js,.txt,.bak,.json"
+  expected_output:
+    - "admin                   [Status: 301, Size: 312, Words: 20, Lines: 10]"
+    - "api                     [Status: 200, Size: 1420, Words: 120, Lines: 45]"
+    - "config.php.bak          [Status: 200, Size: 654, Words: 32, Lines: 15]"
+    - ".git/HEAD               [Status: 200, Size: 41, Words: 2, Lines: 2]"
+  common_mistakes:
+    - "Not filtering out false positives using -fs (file size) or -fw (word count) when servers return custom 200 OK soft 404 pages."
+    - "Neglecting file extension fuzzing (.php, .bak, .env, .old, .zip)."
+
+- id: "http-vhost-enum"
+  title: "Virtual Host (VHost) & Subdomain Discovery"
+  phase: "enumeration"
+  purpose: "Fuzz the Host HTTP header to discover subdomains or internal virtual hosts routed on the same IP address."
+  command: "ffuf -u http://{{TARGET}}:{{PORT|80}} -H 'Host: FUZZ.{{DOMAIN|local}}' -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fs {{FILTER_SIZE|0}}"
+  expected_output:
+    - "dev                     [Status: 200, Size: 4590, Words: 320, Lines: 95]"
+    - "internal                [Status: 200, Size: 2940, Words: 180, Lines: 60]"
+    - "api                     [Status: 401, Size: 180, Words: 12, Lines: 4]"
+  common_mistakes:
+    - "Forgetting to calibrate and filter out the default root response size (-fs <size>) before running the fuzz."
+    - "Not adding discovered virtual hosts to /etc/hosts so the browser can navigate to them."
+
+- id: "http-sensitive-files"
+  title: "Critical Files & Information Disclosure Checks"
+  phase: "enumeration"
+  purpose: "Probe for exposed configuration files, source code repositories (.git, .svn), environment secrets (.env), and robot directives."
+  command: "curl -s -I http://{{TARGET}}:{{PORT|80}}/robots.txt && curl -s http://{{TARGET}}:{{PORT|80}}/.env"
+  expected_output:
+    - "User-agent: *\nDisallow: /admin_backup/\nDisallow: /internal-api/"
+    - "DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_DATABASE=corp\nDB_USERNAME=root\nDB_PASSWORD=SuperSecretPass123!"
+  common_mistakes:
+    - "Skipping security.txt, sitemap.xml, or swagger/openapi endpoints."
+    - "Ignoring source code comments in client-side JavaScript files."

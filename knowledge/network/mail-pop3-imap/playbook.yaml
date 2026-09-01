@@ -1,0 +1,65 @@
+id: mail-pop3-imap
+name: POP3 & IMAP Mail Service Exploitation (Ports 110 / 143 / 993 / 995)
+category: network
+description: Methodology for POP3 and IMAP mailboxes on ports 110, 995, 143, and 993. Covers NTLM domain info leak, interactive mailbox reading, and downloading credentials.
+port_triggers:
+  - 110
+  - 143
+  - 993
+  - 995
+service_triggers:
+  - pop3
+  - pop3s
+  - imap
+  - imaps
+tags:
+  - pop3
+  - imap
+  - email
+  - credentials
+  - recon
+steps:
+  - id: mail-ntlm-info
+    title: POP3 / IMAP NTLM Domain Information Leak
+    phase: reconnaissance
+    purpose: Query the POP3/IMAP NTLM authentication banner to extract the internal Domain name, Computer NetBIOS name, and DNS forest hierarchy.
+    command: nmap -p 110,143,993,995 --script pop3-ntlm-info,imap-ntlm-info -sV {{TARGET}}
+    expected_output:
+      - '| pop3-ntlm-info: Target_Name: CORP, NetBIOS_Domain_Name: CORP, DNS_Domain_Name: corp.local'
+    common_mistakes:
+      - Not inspecting TLS certificates on port 993/995 for additional virtual hostnames.
+    if_success: Internal domain and DC hostname recovered! Update target domain name.
+    if_failure: NTLM auth not enabled. Proceed to interactive login.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-pop
+  - id: mail-pop3-read
+    title: POP3 Interactive Login & Email Retrieval
+    phase: enumeration
+    purpose: Log into the POP3 inbox using valid credentials and retrieve stored emails containing passwords, activation links, or backup codes.
+    command: curl "pop3://{{TARGET}}" -u "{{USERNAME}}:{{PASSWORD}}" -v
+    expected_output:
+      - +OK Logged in.
+      - 1 1420
+      - 2 5120
+    common_mistakes:
+      - To read specific email messages, use `curl "pop3://{{TARGET}}/1" -u "{{USERNAME}}:{{PASSWORD}}"`.
+    if_success: Emails accessed! Download all messages and inspect for credentials.
+    if_failure: Authentication failed. Check if SSL/TLS is required (`pop3s://`).
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-pop
+  - id: mail-imap-read
+    title: IMAP Secure Mailbox Inspection (openssl)
+    phase: enumeration
+    purpose: Connect to IMAPS over TLS to inspect folders, read inbox messages, and search for sensitive attachments.
+    command: openssl s_client -connect {{TARGET}}:993 -crlf -quiet
+    expected_output:
+      - '* OK IMAP4rev1 Server Ready'
+      - 1 LOGIN {{USERNAME}} {{PASSWORD}}
+      - 2 SELECT INBOX
+      - 3 FETCH 1 BODY[]
+    common_mistakes:
+      - Commands in IMAP require a tag prefix (e.g. `1 LOGIN`, `2 SELECT INBOX`).
+    if_success: IMAP session established! Dump all user inboxes.
+    if_failure: Login rejected. Verify credentials.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-imap

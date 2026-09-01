@@ -1,0 +1,28 @@
+id: finger
+name: Finger User Information Service (Port 79)
+category: network
+description: Methodology for Finger service on port 79. Covers banner grabbing, user enumeration, and active user home directory inspection.
+port_triggers:
+  - 79
+service_triggers:
+  - finger
+tags:
+  - finger
+  - user-enumeration
+  - recon
+steps:
+  - id: finger-user-enum
+    title: Finger Active User Enumeration
+    phase: enumeration
+    purpose: Query the finger service to enumerate logged-in users, real names, home directories, and office locations.
+    command: finger @{{TARGET}} && finger admin@{{TARGET}}
+    expected_output:
+      - 'Login: admin     Name: Administrator'
+      - 'Directory: /home/admin     Shell: /bin/bash'
+      - On since Mon Aug 31 10:00 on pts/0
+    common_mistakes:
+      - If `finger @target` is disabled, query individual candidate usernames (`finger root@target`).
+    if_success: Valid system users discovered! Save list for password spraying.
+    if_failure: Service disabled or filtered. Proceed to other open services.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-finger

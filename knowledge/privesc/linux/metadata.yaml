@@ -1,0 +1,13 @@
+id: "linux-privesc"
+name: "Linux Local Privilege Escalation"
+category: "privesc"
+description: "Tactical post-exploitation and privilege escalation methodology on Linux systems once initial shell access is obtained. Covers sudo rights, SUID/SGID binaries, capabilities, group permissions (docker, lxd), cron jobs, and kernel exploits."
+port_triggers: []
+requires_shell: true
+target_os: "linux"
+tags:
+  - "linux"
+  - "privesc"
+  - "sudo"
+  - "suid"
+  - "docker"

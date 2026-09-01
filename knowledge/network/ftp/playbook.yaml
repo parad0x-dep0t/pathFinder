@@ -1,0 +1,68 @@
+id: ftp
+name: FTP Enumeration & Exploitation (Port 21)
+category: network
+description: Complete methodology for File Transfer Protocol (FTP) on port 21. Covers anonymous login checks, recursive downloads, brute-forcing, and common server vulnerabilities (vsftpd, ProFTPD).
+port_triggers:
+  - 21
+service_triggers:
+  - ftp
+tags:
+  - ftp
+  - recon
+  - enumeration
+  - bruteforce
+steps:
+  - id: ftp-anon-netexec
+    title: FTP Anonymous Login Check (NetExec)
+    phase: reconnaissance
+    purpose: Verify if the FTP service allows unauthenticated (anonymous:anonymous) read/write access.
+    command: netexec ftp {{TARGET}} -u 'anonymous' -p ''
+    expected_output:
+      - '[*] FTP {{TARGET}}:21 (name:FTP) (success:True) (anonymous:True)'
+    common_mistakes:
+      - Not testing with an email string like `anonymous@corp.local` as the password.
+    if_success: Anonymous access granted! Proceed to recursive file download and inspect sensitive documents.
+    if_failure: Anonymous access rejected. Proceed to NSE vulnerability scans and credential spraying.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ftp
+  - id: ftp-nmap-scripts
+    title: FTP Nmap Vulnerability & Feature Scripts
+    phase: enumeration
+    purpose: Run NSE scripts to detect FTP anonymous access, bounce attacks, and known backdoor vulnerabilities (vsftpd 2.3.4, ProFTPD 1.3.5 mod_copy).
+    command: nmap -p 21 --script ftp-anon,ftp-bounce,ftp-proftpd-backdoor,ftp-vsftpd-backdoor,ftp-syst -sV {{TARGET}}
+    expected_output:
+      - '| ftp-anon: Anonymous FTP login allowed (FTP code 230)'
+      - '|_ftp-vsftpd-backdoor: VULNERABLE: vsftpd 2.3.4 backdoor'
+    common_mistakes:
+      - Assuming passive mode is default; try active mode if data transfer hangs behind NAT.
+    if_success: Identified exact FTP server version and configuration. Check for known CVE exploits.
+    if_failure: No immediate vulnerabilities found. Proceed to credential bruteforcing or file download.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ftp
+  - id: ftp-recursive-download
+    title: Recursive File & Configuration Download
+    phase: enumeration
+    purpose: Download all accessible directories, files, and hidden archives from the FTP server to your local machine for offline inspection.
+    command: wget -m --no-passive ftp://anonymous:anonymous@{{TARGET}}
+    expected_output:
+      - FINISHED --2024-03-20 12:00:00--
+      - 'Downloaded: 12 files, 4.2M in 3s'
+    common_mistakes:
+      - Missing hidden dotfiles (e.g. `.backup`, `.env`, `.ssh/id_rsa`). Use `ls -la` inside interactive FTP.
+    if_success: Files downloaded! Inspect source code, database configs, and backup archives for credentials.
+    if_failure: Download blocked or empty folder. Test write permissions to see if web shell upload is possible.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ftp
+  - id: ftp-bruteforce-hydra
+    title: FTP Credential Spraying & Bruteforcing
+    phase: exploitation
+    purpose: Test candidate usernames against common wordlists when default or anonymous credentials fail.
+    command: hydra -L users.txt -P /usr/share/wordlists/rockyou.txt ftp://{{TARGET}} -s 21 -f -vV
+    expected_output:
+      - '[21][ftp] host: {{TARGET}}   login: admin   password: password123'
+    common_mistakes:
+      - Running too many threads (-t 16) causing server rate-limiting; stick to -t 4.
+    if_success: Valid FTP credentials found! Log in and inspect private user home directories.
+    if_failure: Bruteforce unsuccessful. Pivot to other open service ports.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-ftp

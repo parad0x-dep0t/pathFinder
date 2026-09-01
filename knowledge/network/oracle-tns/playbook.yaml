@@ -1,0 +1,41 @@
+id: oracle-tns
+name: Oracle TNS Database Exploitation (Port 1521)
+category: network
+description: Methodology for Oracle Database TNS listener on port 1521. Covers SID enumeration (ODAT), default credential attacks, and database code execution.
+port_triggers:
+  - 1521
+service_triggers:
+  - oracle-tns
+  - oracle
+tags:
+  - oracle
+  - tns
+  - odat
+  - database
+steps:
+  - id: oracle-sid-enum
+    title: Oracle SID Enumeration (ODAT)
+    phase: reconnaissance
+    purpose: Enumerate valid Oracle System Identifiers (SIDs e.g. XE, ORCL, PROD) required to authenticate to the database.
+    command: odat sidguesser -s {{TARGET}} -p 1521
+    expected_output:
+      - '[+] Valid SIDs found: XE, ORCL'
+    common_mistakes:
+      - Without a valid SID, login attempts with sqlplus will fail.
+    if_success: SID found! Proceed to password guessing with ODAT.
+    if_failure: SID guesser returned 0 results. Try Metasploit `auxiliary/scanner/oracle/sid_enum`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/1521-1522-1529-pentesting-oracle-listener
+  - id: oracle-password-guess
+    title: Oracle Default Credential Guessing
+    phase: enumeration
+    purpose: Test default Oracle database accounts (scott/tiger, sys/change_on_install, system/manager) against discovered SIDs.
+    command: odat passwordguesser -s {{TARGET}} -p 1521 -d {{ORACLE_SID|XE}}
+    expected_output:
+      - '[+] Valid credentials found on {{ORACLE_SID}}: scott/tiger (Normal), sys/change_on_install (SYSDBA)'
+    common_mistakes:
+      - Administrative logins often require the `as sysdba` flag.
+    if_success: 'Valid credentials found! Connect with SQL*Plus: `sqlplus {{USERNAME}}/{{PASSWORD}}@{{TARGET}}:1521/{{ORACLE_SID}} as sysdba`.'
+    if_failure: Default accounts disabled. Run `odat all -s {{TARGET}} -d {{ORACLE_SID}}` for full module audit.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/1521-1522-1529-pentesting-oracle-listener

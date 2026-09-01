@@ -1,0 +1,14 @@
+id: "http"
+name: "Web Application Assessment (HTTP/HTTPS)"
+category: "network"
+description: "Structured methodology for web services running on ports 80, 443, 8080, and 8443. Includes web technology fingerprinting, content/directory discovery, virtual host routing enumeration, and sensitive file checks."
+port_triggers:
+  - 80
+  - 443
+  - 8080
+  - 8443
+tags:
+  - "web"
+  - "http"
+  - "fuzzing"
+  - "recon"
