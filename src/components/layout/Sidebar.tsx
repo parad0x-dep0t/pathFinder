@@ -423,6 +423,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="space-y-1 font-mono text-xs">
+            {/* Field Manual & Knowledge Hub */}
+            <button
+              type="button"
+              onClick={() => setActiveView('knowledge')}
+              className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between transition-colors ${
+                activeView === 'knowledge'
+                  ? 'bg-slate-800 text-emerald-300 border-emerald-500 shadow-sm font-semibold'
+                  : 'bg-slate-900/60 text-slate-300 border-slate-800 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-emerald-400" />
+                <span>Field Manual & Notes</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">
+                65 Guides
+              </span>
+            </button>
+
             {/* Credentials Vault */}
             <button
               type="button"

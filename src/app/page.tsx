@@ -15,6 +15,7 @@ import { TargetModal } from '@/components/targets/TargetModal';
 import { NmapImportModal } from '@/components/nmap/NmapImportModal';
 import { TargetRoadmapView } from '@/components/roadmap/TargetRoadmapView';
 // import { AttackGraphView } from '@/components/graph/AttackGraphView';
+import { KnowledgeBaseHub } from '@/components/knowledge/KnowledgeBaseHub';
 import { ResetConfirmModal } from '@/components/common/ResetConfirmModal';
 // import { WelcomeModeModal } from '@/components/layout/WelcomeModeModal';
 import { Crosshair, ShieldCheck, Terminal, Compass, Network, Sparkles, BookOpen } from 'lucide-react';
@@ -134,6 +135,13 @@ export default function Home() {
                 )
               )}
 
+              {activeView === 'knowledge' && (
+                <KnowledgeBaseHub
+                  target={activeTarget}
+                  activeCredential={activeCredential}
+                />
+              )}
+
               {activeView === 'credentials' && (
                 <CredentialsVault target={activeTarget} />
               )}
@@ -145,6 +153,10 @@ export default function Home() {
               {activeView === 'notes' && <NotesEditor target={activeTarget} />}
             </main>
           </>
+        ) : activeView === 'knowledge' ? (
+          <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6">
+            <KnowledgeBaseHub target={null} activeCredential={null} />
+          </main>
         ) : (
           <div className="flex-1 flex items-center justify-center p-6 text-center">
             <div className="max-w-xl w-full space-y-6 rounded-2xl border border-slate-800 bg-[#0b1120] p-8 shadow-cyber-md relative overflow-hidden">

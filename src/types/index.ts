@@ -84,7 +84,7 @@ export interface VariableContext {
   isStreamerMode?: boolean;
 }
 
-export type ActiveView = 'roadmap' | 'graph' | 'playbook' | 'credentials' | 'shell' | 'notes';
+export type ActiveView = 'roadmap' | 'graph' | 'playbook' | 'knowledge' | 'credentials' | 'shell' | 'notes';
 
 // ==========================================
 // Attack Graph Types

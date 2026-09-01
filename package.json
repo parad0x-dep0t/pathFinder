@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/compile-knowledge.mjs",
+    "predev": "node scripts/compile-knowledge.mjs && node scripts/build-notes-knowledge.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/compile-knowledge.mjs",
+    "prebuild": "node scripts/compile-knowledge.mjs && node scripts/build-notes-knowledge.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

