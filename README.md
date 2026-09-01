@@ -1,4 +1,4 @@
-# 🧭 Pathfinder // CTF & Penetration Testing Playbook Companion
+# 🧭 Pathfinder // CTF & Penetration Testing Playbook
 
 > **A modern, high-density, interactive penetration testing and CTF engagement assistant.** Built for security professionals, CTF players (HackTheBox, Proving Grounds, TryHackMe), and penetration testers to navigate service enumeration, exploitation, privilege escalation, and lateral movement with speed and precision.
 
