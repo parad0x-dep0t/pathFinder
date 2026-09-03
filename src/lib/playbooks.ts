@@ -72,8 +72,8 @@ export function getPlaybooksForTarget(
       openPorts.some(
         (p) =>
           portServices?.[p] === 'unknown' ||
-          (![21, 22, 53, 80, 88, 139, 389, 443, 445, 1433, 3389, 5985, 6379, 8080].includes(p) &&
-            !['http', 'ssh', 'ftp', 'smb', 'ldap', 'mssql', 'winrm', 'redis', 'dns', 'kerberos'].includes(
+          (![21, 22, 53, 80, 88, 123, 139, 389, 443, 445, 1433, 3389, 5985, 6379, 8080].includes(p) &&
+            !['http', 'ssh', 'ftp', 'smb', 'ldap', 'mssql', 'winrm', 'redis', 'dns', 'kerberos', 'ntp'].includes(
               portServices?.[p] || ''
             ))
       )

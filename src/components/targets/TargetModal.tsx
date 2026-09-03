@@ -23,6 +23,7 @@ const COMMON_PORTS = [
   { port: 88, label: '88 Kerberos' },
   { port: 110, label: '110 POP3' },
   { port: 111, label: '111 RPC/NFS' },
+  { port: 123, label: '123 NTP' },
   { port: 139, label: '139 NetBIOS' },
   { port: 143, label: '143 IMAP' },
   { port: 161, label: '161 SNMP' },

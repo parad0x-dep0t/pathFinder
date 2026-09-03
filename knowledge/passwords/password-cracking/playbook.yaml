@@ -1,13 +1,15 @@
 id: password-cracking
 name: Password Attacks & Hash Cracking
 category: passwords
-description: Comprehensive methodology for identifying and cracking password hashes. Covers NTLM, NetNTLMv2, Kerberoast TGS, AS-REP TGT, Linux /etc/shadow, KeePass databases, ZIP/RAR archives, and SSH keys.
+description: Comprehensive methodology for identifying and cracking password hashes. Covers NTLM, NetNTLMv2, Kerberoast TGS, AS-REP TGT, Timeroast MS-SNTP, Linux /etc/shadow, KeePass databases, ZIP/RAR archives, and SSH keys.
 port_triggers: []
 tags:
   - hashcat
   - john
   - passwords
   - cracking
+  - timeroasting
+  - kerberoasting
 steps:
   - id: hash-identify
     title: Hash Algorithm Identification (nth / hash-identifier)
@@ -80,6 +82,21 @@ steps:
     if_failure: Try rule-based dictionary attacks.
     references:
       - https://wadcoms.github.io/
+  - id: hash-crack-timeroast
+    title: Crack Timeroast MS-SNTP Hashes (Mode 31300)
+    phase: exploitation
+    purpose: Crack Windows Time Service (W32Time) MS-SNTP authentication digest hashes extracted via Timeroasting.
+    command: hashcat -m 31300 timeroast.hashes /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O
+    expected_output:
+      - $ntp$1$82f9...$91b3...:Password123!
+      - 'Status: Cracked'
+    common_mistakes:
+      - Ensure hash file format matches Hashcat mode 31300 (format `$ntp$1$<salt>$<hash>`).
+      - For John the Ripper, use `john --format=timeroast timeroast.hashes --wordlist=/usr/share/wordlists/rockyou.txt`.
+    if_success: Plaintext account password cracked! Authenticate to domain services.
+    if_failure: Password not in rockyou.txt. Try rule mutations or custom wordlists.
+    references:
+      - https://hashcat.net/wiki/doku.php?id=example_hashes
   - id: hash-crack-shadow
     title: Crack Linux /etc/shadow Hashes (SHA-512 $6$ - Mode 1800)
     phase: exploitation

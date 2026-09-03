@@ -38,6 +38,7 @@ export function inferServiceFromBanners(portNum: number, rawService: string, ful
     if (normService.includes('winrm') || normService.includes('wsman')) return 'winrm';
     if (normService.includes('redis')) return 'redis';
     if (normService.includes('domain') || normService.includes('dns')) return 'dns';
+    if (normService.includes('ntp') || normService.includes('time') || normService.includes('w32time')) return 'ntp';
     return normService;
   }
 
